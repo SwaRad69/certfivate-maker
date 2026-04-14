@@ -1,3 +1,4 @@
+numpy==1.24.3
 Flask==2.3.3
 Werkzeug==2.3.7
 setuptools>=65.5.0
@@ -9,5 +10,5 @@ python-dotenv==1.0.0
 tqdm==4.66.2
 gunicorn==21.2.0
 openpyxl==3.1.2
-pandas==2.1.4
+pandas==2.0.3
 odfpy==1.4.1
