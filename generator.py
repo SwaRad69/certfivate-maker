@@ -163,8 +163,8 @@ def detect_placeholders_in_slide(slides_service, presentation_id: str) -> Set[st
                                 text_elems = cell.get('textElements', [])
                             extract_from_text_elements(text_elems)
         
-        # Normalize placeholders to lowercase for case-insensitive matching
-        normalized_placeholders = {p.lower() for p in placeholders}
+        # Normalize placeholders to lowercase and remove surrounding quotes
+        normalized_placeholders = {p.lower().strip('"\'') for p in placeholders}
         logging.info(f"Detected placeholders: {normalized_placeholders}")
         return normalized_placeholders
         
@@ -657,8 +657,8 @@ def generate_certificates_oauth2(
                 # Duplicate template
                 temp_slide_id = duplicate_slide_template(drive_service, template_id, row_idx)
                 
-                # Prepare replacements
-                replacements = {k: str(v) for k, v in row.items() if k in detected_placeholders}
+                # Prepare replacements (case-insensitive matching with CSV columns)
+                replacements = {k.lower(): str(v) for k, v in row.items() if k.lower() in detected_placeholders}
                 
                 # Replace text
                 if not replace_text_in_slide(slides_service, temp_slide_id, replacements):
