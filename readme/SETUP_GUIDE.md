@@ -58,7 +58,7 @@ To use the certificate generator, you need:
 4. Click **ENABLE**
 5. Confirm it's enabled
 
-✅ You should now have both APIs enabled. You can verify:
+You should now have both APIs enabled. You can verify:
 - Go to **APIs & Services** → **Enabled APIs & services**
 - You should see "Google Drive API" and "Google Slides API" in the list
 
@@ -143,7 +143,7 @@ Open `credentials.json` in a text editor. It should contain:
 }
 ```
 
-✅ You now have the credentials file needed to run the generator!
+You now have the credentials file needed to run the generator!
 
 ---
 
@@ -243,11 +243,11 @@ If the above works, you're ready to use the generator!
 
 ## Security Checklist
 
-- ✅ `credentials.json` is in `.gitignore` (not committed)
-- ✅ Service account email shared with template (readonly if possible)
-- ✅ Service account scopes limited to Drive + Slides APIs
-- ✅ Key is stored locally, not shared online
-- ✅ JSON file permissions are readable only by you
+- `credentials.json` is in `.gitignore` (not committed)
+- Service account email shared with template (readonly if possible)
+- Service account scopes limited to Drive + Slides APIs
+- Key is stored locally, not shared online
+- JSON file permissions are readable only by you
 
 ---
 

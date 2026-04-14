@@ -87,10 +87,10 @@ This preserves formatting much better than exporting as image.
 
 ### Key Points
 
-- ✅ **Placeholder syntax:** `{{FieldName}}`
-- ✅ **Case-sensitive:** `{{Name}}` ≠ `{{name}}`
-- ✅ **Must match CSV columns:** Column name in CSV = Placeholder name
-- ✅ **Edit in Google Slides, not Canva**
+- **Placeholder syntax:** `{{FieldName}}`
+- **Case-sensitive:** `{{Name}}` ≠ `{{name}}`
+- **Must match CSV columns:** Column name in CSV = Placeholder name
+- **Edit in Google Slides, not Canva**
 
 ### Adding Placeholders
 
@@ -267,24 +267,24 @@ python main.py --csv sample_participants.csv --template YOUR_TEMPLATE_ID --verbo
 
 ### Design
 
-- ✅ Use simple, clean layouts
-- ✅ Leave space around placeholders for longer text
-- ✅ Test with longest expected values (name, email, etc.)
-- ✅ Use high-contrast colors for readability
+- Use simple, clean layouts
+- Leave space around placeholders for longer text
+- Test with longest expected values (name, email, etc.)
+- Use high-contrast colors for readability
 
 ### Placeholders
 
-- ✅ Use consistent naming (all lowercase path, CamelCase, or snake_case)
-- ✅ Keep placeholder names short and memorable
-- ✅ Document placeholder names in README or comment in CSV
-- ✅ Test with sample CSV before full batch
+- Use consistent naming (all lowercase path, CamelCase, or snake_case)
+- Keep placeholder names short and memorable
+- Document placeholder names in README or comment in CSV
+- Test with sample CSV before full batch
 
 ### Export
 
-- ✅ Use PPTX format (preserves better than PNG)
-- ✅ Share template with service account before generating
-- ✅ Keep original Canva file (allows re-export if needed)
-- ✅ Test download/open to verify file integrity
+- Use PPTX format (preserves better than PNG)
+- Share template with service account before generating
+- Keep original Canva file (allows re-export if needed)
+- Test download/open to verify file integrity
 
 ---
 

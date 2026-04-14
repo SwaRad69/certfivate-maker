@@ -232,4 +232,4 @@ logging.basicConfig(level=logging.DEBUG)
 
 ---
 
-**Ready?** Start the app: `python app.py` 🚀
+**Ready?** Start the app: `python app.py`

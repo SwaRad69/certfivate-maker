@@ -32,8 +32,8 @@ Then open http://localhost:5000/ in your browser.
 
 ### Deployment Steps
 
-1. **Create `.gitignore`** ✅ (already created)
-2. **Initialize Git** ✅ (you've already done this)
+1. **Create `.gitignore`** (already created)
+2. **Initialize Git** (you've already done this)
 3. **Read [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)** - Complete step-by-step guide
 4. **Follow the 8 steps in the guide:**
    - Step 1: Prepare repo (done)
@@ -48,11 +48,11 @@ Then open http://localhost:5000/ in your browser.
 ### Essential Files for Deployment
 
 The following files are already created:
-- ✅ `Procfile` - Tells Render how to run your app
-- ✅ `runtime.txt` - Specifies Python version
-- ✅ `.gitignore` - Excludes secret files
-- ✅ `DEPLOYMENT_GUIDE.md` - Complete deployment instructions
-- ✅ `requirements.txt` - All Python dependencies
+- `Procfile` - Tells Render how to run your app
+- `runtime.txt` - Specifies Python version
+- `.gitignore` - Excludes secret files
+- `DEPLOYMENT_GUIDE.md` - Complete deployment instructions
+- `requirements.txt` - All Python dependencies
 
 ### Never Commit to Git
 
@@ -102,11 +102,11 @@ certfivate maker/
 ├── config.py                  # CLI configuration
 ├── .env                       # (NOT in Git - copy from .env.example)
 ├── .env.example              # Environment template
-├── .gitignore                # Git ignore rules ✅
-├── Procfile                  # Render deployment config ✅
-├── runtime.txt               # Python version ✅
+├── .gitignore                # Git ignore rules
+├── Procfile                  # Render deployment config
+├── runtime.txt               # Python version
 ├── requirements.txt          # Root dependencies (symlinked to web/)
-├── DEPLOYMENT_GUIDE.md       # Production deployment guide ✅
+├── DEPLOYMENT_GUIDE.md       # Production deployment guide
 ├── QUICK_START.md            # Quick start guide
 └── README.md                 # Project overview
 ```

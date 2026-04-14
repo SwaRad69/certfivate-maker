@@ -1,4 +1,4 @@
-# 🚀 Production Deployment Checklist
+# Production Deployment Checklist
 
 Use this checklist to ensure everything is ready for deployment to Render.
 

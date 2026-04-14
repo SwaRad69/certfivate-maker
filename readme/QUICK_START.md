@@ -140,11 +140,11 @@ python main.py --csv data.csv --template ID --cleanup
 
 ## Next Steps
 
-✅ **Done with one batch?** Run again with different CSV  
-✅ **Need help?** Check [README.md](README.md) for detailed docs  
-✅ **Advanced setup?** See [SETUP_GUIDE.md](SETUP_GUIDE.md)  
-✅ **Design questions?** Read [TEMPLATE_DESIGN_GUIDE.md](TEMPLATE_DESIGN_GUIDE.md)  
+**Done with one batch?** Run again with different CSV  
+**Need help?** Check [README.md](README.md) for detailed docs  
+**Advanced setup?** See [SETUP_GUIDE.md](SETUP_GUIDE.md)  
+**Design questions?** Read [TEMPLATE_DESIGN_GUIDE.md](TEMPLATE_DESIGN_GUIDE.md)  
 
 ---
 
-**Happy certificating!** 🎉
+**Happy certificating!**

@@ -60,13 +60,13 @@ def index():
 
 ## Landing Page Features
 
-- ✨ Modern, professional design with gradient backgrounds
-- 📱 Fully responsive for mobile, tablet, and desktop
-- ✅ 6 feature cards highlighting app benefits
-- 📝 4-step instructions on how to use
-- 📹 Video tutorial section (your embed goes here)
-- 📊 Statistics section showing app capabilities
-- 🎯 Multiple call-to-action buttons
+- Modern, professional design with gradient backgrounds
+- Fully responsive for mobile, tablet, and desktop
+- 6 feature cards highlighting app benefits
+- 4-step instructions on how to use
+- Video tutorial section (your embed goes here)
+- Statistics section showing app capabilities
+- Multiple call-to-action buttons
 
 ## Customization
 
@@ -83,4 +83,4 @@ You can customize the landing page by editing `web/templates/landing.html`:
 3. You should see the landing page instead of being redirected to login
 4. The YouTube video should display if you've set the `YOUTUBE_EMBED` variable
 
-Enjoy! 🎉
+Enjoy!

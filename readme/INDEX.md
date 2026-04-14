@@ -4,7 +4,7 @@ Welcome! All documentation for the Certificate Generator project is organized he
 
 ---
 
-## 🚀 Quick Start (5 minutes)
+## Quick Start (5 minutes)
 
 **New to the project?** Start here!
 
@@ -13,7 +13,7 @@ Welcome! All documentation for the Certificate Generator project is organized he
 
 ---
 
-## 📖 Setup & Configuration
+## Setup & Configuration
 
 **Setting up for the first time?**
 
@@ -23,7 +23,7 @@ Welcome! All documentation for the Certificate Generator project is organized he
 
 ---
 
-## 💻 Usage Guides
+## Usage Guides
 
 **Ready to generate certificates?**
 
@@ -32,7 +32,7 @@ Welcome! All documentation for the Certificate Generator project is organized he
 
 ---
 
-## 🚢 Deployment
+## Deployment
 
 **Ready to deploy to production?**
 
@@ -41,7 +41,7 @@ Welcome! All documentation for the Certificate Generator project is organized he
 
 ---
 
-## 📋 Project Information
+## Project Information
 
 **Want to understand the project structure?**
 
@@ -51,7 +51,7 @@ Welcome! All documentation for the Certificate Generator project is organized he
 
 ---
 
-## 📚 Documentation by Role
+## Documentation by Role
 
 ### For Users
 1. Read [TEMPLATE_DESIGN_GUIDE.md](TEMPLATE_DESIGN_GUIDE.md) — Design your certificate
@@ -70,7 +70,7 @@ Welcome! All documentation for the Certificate Generator project is organized he
 
 ---
 
-## 🔗 Quick Links
+## Quick Links
 
 | Document | Purpose | Duration |
 |----------|---------|----------|
@@ -118,4 +118,4 @@ Welcome! All documentation for the Certificate Generator project is organized he
 
 ---
 
-**Start with [WEB_QUICK_START.md](WEB_QUICK_START.md) if you're unsure!** 🚀
+**Start with [WEB_QUICK_START.md](WEB_QUICK_START.md) if you're unsure!

@@ -15,10 +15,10 @@ Deploy the Certificate Generator as a web application where users sign in with t
 6. User downloads PDFs from their Drive
 
 **Key Benefits:**
-- ✅ Decentralized storage (no server storage needed)
-- ✅ User privacy (each user's data in their Drive)
-- ✅ Scalable (no central bottleneck)
-- ✅ Minimal server resources
+- Decentralized storage (no server storage needed)
+- User privacy (each user's data in their Drive)
+- Scalable (no central bottleneck)
+- Minimal server resources
 
 ---
 
@@ -54,7 +54,7 @@ certificate-maker/
     └── requirements.txt
 ```
 
-⚠️ **Important:** Never commit `client_secrets.json` to Git.
+**Important:** Never commit `client_secrets.json` to Git.
 
 ---
 
@@ -449,4 +449,4 @@ See [WEB_USER_GUIDE.md](WEB_USER_GUIDE.md) (to be created).
 
 **Questions?** Check Flask/Google API docs or contact support.
 
-Your app is now production-ready! 🎉
+Your app is now production-ready!

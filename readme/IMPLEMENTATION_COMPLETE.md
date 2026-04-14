@@ -8,20 +8,20 @@ Your Canva → Google Slides → PDF bulk certificate generator is fully impleme
 
 ## What's Included
 
-### ✅ Core Application (4 Python modules)
+### Core Application (4 Python modules)
 - **main.py** — CLI entry point with full argument parsing
 - **generator.py** — All Google API interactions and certificate logic
 - **config.py** — Configuration, API scopes, regex patterns
 - **utils.py** — Checkpoint system, logging, file utilities
 
-### ✅ Complete Documentation (5 guides)
+### Complete Documentation (5 guides)
 - **README.md** — Full usage guide with examples and troubleshooting
 - **QUICK_START.md** — 10-minute setup for impatient users
 - **SETUP_GUIDE.md** — Step-by-step Google Cloud project setup
 - **TEMPLATE_DESIGN_GUIDE.md** — Canva → Google Slides workflow
 - **PROJECT_STRUCTURE.md** — Code organization and module details
 
-### ✅ Configuration & Examples
+### Configuration & Examples
 - **requirements.txt** — All Python dependencies (ready for `pip install`)
 - **sample_participants.csv** — Example CSV for testing
 - **.gitignore** — Proper exclusions for credentials and outputs
@@ -103,16 +103,16 @@ Your PDFs appear in `./certs/` folder!
 
 ## Key Features Implemented
 
-✅ **Canva → Google Slides workflow** — Full support for Canva PPTX import  
-✅ **Dynamic placeholder detection** — Auto-finds `{{FieldName}}` in slides  
-✅ **CSV-driven bulk generation** — One PDF per row, with data replacement  
-✅ **Resume on failure** — Checkpoint system for interrupted runs  
-✅ **Full error handling** — Graceful degradation with detailed logs  
-✅ **Comprehensive logging** — File + console output with debug mode  
-✅ **Service account auth** — Google Cloud recommended security  
-✅ **Temp file cleanup** — Optional auto-cleanup of Drive copies  
-✅ **Safe filenames** — Automatic sanitization of PDF names  
-✅ **Progress tracking** — Real-time progress bar with tqdm  
+**Canva → Google Slides workflow** — Full support for Canva PPTX import  
+**Dynamic placeholder detection** — Auto-finds `{{FieldName}}` in slides  
+**CSV-driven bulk generation** — One PDF per row, with data replacement  
+**Resume on failure** — Checkpoint system for interrupted runs  
+**Full error handling** — Graceful degradation with detailed logs  
+**Comprehensive logging** — File + console output with debug mode  
+**Service account auth** — Google Cloud recommended security  
+**Temp file cleanup** — Optional auto-cleanup of Drive copies  
+**Safe filenames** — Automatic sanitization of PDF names  
+**Progress tracking** — Real-time progress bar with tqdm  
 
 ---
 
@@ -229,11 +229,11 @@ If something doesn't work:
 
 ## What's NOT Included (Intentional)
 
-- ❌ GUI interface (CLI only — more powerful for batch work)
-- ❌ Automated Google Cloud setup (manual but documented)
-- ❌ Multi-threaded batch generation (sequential safer for API limits)
-- ❌ Email delivery (out of scope, but easy to add)
-- ❌ Multi-language support (English docs provided)
+- GUI interface (CLI only — more powerful for batch work)
+- Automated Google Cloud setup (manual but documented)
+- Multi-threaded batch generation (sequential safer for API limits)
+- Email delivery (out of scope, but easy to add)
+- Multi-language support (English docs provided)
 
 ---
 
@@ -271,14 +271,14 @@ For issues or improvements:
 
 ## Summary
 
-✅ **Full-featured certificate generator built**  
-✅ **Complete documentation included**  
-✅ **Python code production-ready**  
-✅ **Error handling comprehensive**  
-✅ **Resume capability implemented**  
-✅ **Google APIs properly integrated**  
+**Full-featured certificate generator built**  
+**Complete documentation included**  
+**Python code production-ready**  
+**Error handling comprehensive**  
+**Resume capability implemented**  
+**Google APIs properly integrated**  
 
-**Status: Ready to Use** 🎉
+**Status: Ready to Use**
 
 Start with [QUICK_START.md](QUICK_START.md) or [SETUP_GUIDE.md](SETUP_GUIDE.md) depending on what you need next.
 

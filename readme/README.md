@@ -4,12 +4,12 @@ Generate bulk personalized certificates from a Canva-designed template in Google
 
 ## Features
 
-✅ **Canva → Google Slides Workflow** — Design in Canva, export to Google Slides, add dynamic placeholders  
-✅ **Dynamic Placeholder Detection** — Auto-detects `{{Placeholder}}` patterns in your slide  
-✅ **CSV-Driven Generation** — Read participant data from CSV, generate one PDF per row  
-✅ **Resume on Failure** — Checkpoint system lets you resume if generation is interrupted  
-✅ **Bulk Export** — Generate 100–500+ certificates reliably in one run  
-✅ **Comprehensive Logging** — Full logs to file + console, detailed error messages  
+**Canva → Google Slides Workflow** — Design in Canva, export to Google Slides, add dynamic placeholders  
+**Dynamic Placeholder Detection** — Auto-detects `{{Placeholder}}` patterns in your slide  
+**CSV-Driven Generation** — Read participant data from CSV, generate one PDF per row  
+**Resume on Failure** — Checkpoint system lets you resume if generation is interrupted  
+**Bulk Export** — Generate 100–500+ certificates reliably in one run  
+**Comprehensive Logging** — Full logs to file + console, detailed error messages  
 
 ## Prerequisites
 
@@ -340,9 +340,9 @@ The system creates temporary copies of your template:
 ## Security & Best Practices
 
 **Credentials Security:**
-- ✅ `credentials.json` is in `.gitignore` (not committed to Git)
-- ✅ Service account = no personal account tokens
-- ✅ Scopes limited to Drive + Slides APIs
+- `credentials.json` is in `.gitignore` (not committed to Git)
+- Service account = no personal account tokens
+- Scopes limited to Drive + Slides APIs
 
 **File Permissions:**
 - Share template with service account email (read-only is sufficient)

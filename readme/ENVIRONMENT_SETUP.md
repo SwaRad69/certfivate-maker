@@ -123,13 +123,13 @@ See [WEB_DEPLOYMENT_GUIDE.md](WEB_DEPLOYMENT_GUIDE.md) for platform-specific ins
 
 ## What to Commit vs. Ignore
 
-### ✅ Safe to Commit to Git
+### Safe to Commit to Git
 - `.env.example` - Shows structure, no real secrets
 - `credentials.json.example` - Template only
 - Source code files
 - Documentation
 
-### ❌ NEVER Commit to Git
+### NEVER Commit to Git
 - `.env` - Contains your actual secret key
 - `client_secrets.json` - Your OAuth credentials
 - `credentials.json` - Service account credentials

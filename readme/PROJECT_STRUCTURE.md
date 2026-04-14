@@ -140,7 +140,7 @@ certificate-maker/               # Project root
    - Saves to file with safe filename
    - Returns: `bool` — success/failure
 
-8. **`generate_certificates(csv_path, template_id, output_folder, ...)`** ⭐
+8. **`generate_certificates(csv_path, template_id, output_folder, ...)`** - Main function
    - **Main orchestration function**
    - Loads CSV, detects placeholders, validates
    - Loops through rows with checkpoint resume
