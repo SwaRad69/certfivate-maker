@@ -100,9 +100,27 @@
                 <small>Name of folder in your Drive where certificates will be saved</small>
             </div>
 
-            <button type="submit" class="btn btn-primary btn-large">
-                Generate Certificates
-            </button>
+            <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                <button type="submit" class="btn btn-primary btn-large">
+                    Generate Certificates
+                </button>
+                <button type="button" id="testBtn" class="btn btn-secondary btn-large" style="background-color: #ff9800;">
+                    🧪 Test (First N)
+                </button>
+            </div>
+            <div id="testCountGroup" style="display: none; margin-bottom: 20px;">
+                <label for="testCount" class="label">How many certificates to test?</label>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <input type="number" id="testCount" name="test_count" min="1" max="1000" value="10" class="input" style="max-width: 100px;">
+                    <button type="button" id="startTestBtn" class="btn btn-secondary" style="background-color: #ff9800;">
+                        ✅ Start Test
+                    </button>
+                    <button type="button" id="cancelTestBtn" class="btn btn-secondary" style="background-color: #999;">
+                        ✗ Cancel
+                    </button>
+                </div>
+                <small>Test certificates will be saved to a separate "(TEST)" folder</small>
+            </div>
         </form>
 
         <div id="progressContainer" style="display:none;">

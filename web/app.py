@@ -426,6 +426,27 @@ def api_generate():
         if not csv_content:
             return jsonify({'error': 'No data could be extracted from the provided source'}), 400
         
+        # Handle test mode
+        test_mode = request.form.get('test_mode', '').lower() == 'true'
+        if test_mode:
+            test_count = int(request.form.get('test_count', 10))
+            if test_count < 1:
+                test_count = 10
+            
+            # Limit CSV to test_count rows
+            csv_lines = csv_content.split('\n')
+            header = csv_lines[0] if csv_lines else ''
+            data_rows = csv_lines[1:]
+            
+            # Keep header + test_count rows
+            limited_rows = [header] + data_rows[:test_count]
+            csv_content = '\n'.join(limited_rows)
+            
+            # Modify output folder name
+            output_folder = f"{output_folder} (TEST)"
+            
+            logger.info(f"Test mode enabled: limiting to {test_count} certificates")
+        
         try:
             # Generate certificates with user's credentials
             logger.info(f"Starting certificate generation for {session.get('user_email', 'unknown')}")

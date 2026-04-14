@@ -95,6 +95,39 @@ function setupEventListeners() {
         });
     }
 
+    // Test button
+    const testBtn = document.getElementById('testBtn');
+    if (testBtn) {
+        testBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            document.getElementById('testCountGroup').style.display = 'block';
+            document.getElementById('testCount').focus();
+        });
+    }
+
+    // Start test button
+    const startTestBtn = document.getElementById('startTestBtn');
+    if (startTestBtn) {
+        startTestBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const testCount = parseInt(document.getElementById('testCount').value) || 10;
+            if (testCount < 1) {
+                alert('Please enter a number greater than 0');
+                return;
+            }
+            await submitFormWithTestMode(testCount);
+        });
+    }
+
+    // Cancel test button
+    const cancelTestBtn = document.getElementById('cancelTestBtn');
+    if (cancelTestBtn) {
+        cancelTestBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            document.getElementById('testCountGroup').style.display = 'none';
+        });
+    }
+
     // Form submission
     const generateForm = document.getElementById('generateForm');
     if (generateForm) {
@@ -591,10 +624,56 @@ function displayPreview(headers, rows, totalRows) {
     previewDiv.style.display = 'block';
 }
 
+// Submit form with test mode
+async function submitFormWithTestMode(testCount) {
+    const sheetId = document.getElementById('selectedSheetId').value;
+    const csvFile = document.getElementById('csvFile').files[0];
+    const templateId = document.getElementById('templateId').value.trim();
+    const testCountValue = testCount || parseInt(document.getElementById('testCount').value) || 10;
+
+    // Validate template ID first
+    if (!templateId) {
+        showError('Error', 'Please enter or select a template');
+        return;
+    }
+    if (templateId.length < 20) {
+        showError('Error', 'Template ID appears to be invalid (too short)');
+        return;
+    }
+
+    // Determine which data source to use
+    if (sheetId) {
+        if (sheetId.startsWith('csv:')) {
+            if (!csvFromDriveContent) {
+                showError('Error', 'CSV content not loaded. Please reselect the CSV file.');
+                return;
+            }
+            await submitFormWithDriveCSV(csvFromDriveContent, templateId, true, testCountValue);
+        } else {
+            if (!selectedSheetsLoaded) {
+                showError('Error', 'Sheet tabs are still loading. Please wait a moment and try again.');
+                return;
+            }
+            const sheetName = document.getElementById('sheetSelect').value;
+            if (!sheetName) {
+                showError('Error', 'Please select a sheet tab from the dropdown.');
+                return;
+            }
+            await submitFormWithSheetsId(sheetId, sheetName, templateId, true, testCountValue);
+        }
+    } else if (csvFile) {
+        await submitFormWithCSV(csvFile, templateId, true, testCountValue);
+    } else {
+        showError('Error', 'Please either select a Google Sheet/CSV file or upload a CSV file');
+        return;
+    }
+}
+
 // Submit form with CSV content from Google Drive
-async function submitFormWithDriveCSV(csvContent, templateId) {
+async function submitFormWithDriveCSV(csvContent, templateId, testMode = false, testCount = 10) {
     try {
-        showLoading('Generating certificates from CSV file...');
+        const message = testMode ? `Testing with first ${testCount} certificates...` : 'Generating certificates from CSV file...';
+        showLoading(message);
         
         // Create a Blob from CSV content and convert to File object
         const csvBlob = new Blob([csvContent], { type: 'text/csv' });
@@ -605,6 +684,12 @@ async function submitFormWithDriveCSV(csvContent, templateId) {
         formData.append('template_id', templateId);
         formData.append('output_folder', document.getElementById('outputFolder')?.value || 'Certificate Generator');
         
+        // Add test mode parameters if needed
+        if (testMode) {
+            formData.append('test_mode', 'true');
+            formData.append('test_count', testCount);
+        }
+        
         // Include filename field if selected
         const filenameField = document.getElementById('filenameField')?.value;
         if (filenameField) {
@@ -625,6 +710,7 @@ async function submitFormWithDriveCSV(csvContent, templateId) {
         }
         
         const result = await response.json();
+        const folderName = testMode ? 'Certificate Generator (TEST)' : document.getElementById('outputFolder')?.value || 'Certificate Generator';
         showSuccess('Success', result.message, `
             <p><strong>Results:</strong></p>
             <ul>
@@ -632,8 +718,13 @@ async function submitFormWithDriveCSV(csvContent, templateId) {
                 <li>Failed: ${result.summary.failed || 0}</li>
                 <li>Duration: ${result.summary.duration || 'N/A'}s</li>
             </ul>
-            <p>Certificates saved to your Google Drive!</p>
+            <p>Certificates saved to your Google Drive in "${folderName}"!</p>
         `);
+        
+        // Hide test count group after success
+        if (testMode) {
+            document.getElementById('testCountGroup').style.display = 'none';
+        }
     } catch (error) {
         hideLoading();
         showError('Error', error.message || 'Request failed');
@@ -641,14 +732,21 @@ async function submitFormWithDriveCSV(csvContent, templateId) {
 }
 
 // Submit form with CSV file
-async function submitFormWithCSV(csvFile, templateId) {
+async function submitFormWithCSV(csvFile, templateId, testMode = false, testCount = 10) {
     try {
-        showLoading('Generating certificates...');
+        const message = testMode ? `Testing with first ${testCount} certificates...` : 'Generating certificates...';
+        showLoading(message);
         
         const formData = new FormData();
         formData.append('csv_file', csvFile);
         formData.append('template_id', templateId);
         formData.append('output_folder', document.getElementById('outputFolder')?.value || 'Certificate Generator');
+        
+        // Add test mode parameters if needed
+        if (testMode) {
+            formData.append('test_mode', 'true');
+            formData.append('test_count', testCount);
+        }
         
         // Include filename field if selected
         const filenameField = document.getElementById('filenameField')?.value;
@@ -670,6 +768,7 @@ async function submitFormWithCSV(csvFile, templateId) {
         }
         
         const result = await response.json();
+        const folderName = testMode ? 'Certificate Generator (TEST)' : document.getElementById('outputFolder')?.value || 'Certificate Generator';
         showSuccess('Success', result.message, `
             <p><strong>Results:</strong></p>
             <ul>
@@ -677,8 +776,13 @@ async function submitFormWithCSV(csvFile, templateId) {
                 <li>Failed: ${result.summary.failed || 0}</li>
                 <li>Duration: ${result.summary.duration || 'N/A'}s</li>
             </ul>
-            <p>Certificates saved to your Google Drive!</p>
+            <p>Certificates saved to your Google Drive in "${folderName}"!</p>
         `);
+        
+        // Hide test count group after success
+        if (testMode) {
+            document.getElementById('testCountGroup').style.display = 'none';
+        }
     } catch (error) {
         hideLoading();
         showError('Error', error.message || 'Request failed');
@@ -686,15 +790,22 @@ async function submitFormWithCSV(csvFile, templateId) {
 }
 
 // Submit form with Google Sheets (using Sheet ID)
-async function submitFormWithSheetsId(sheetId, sheetName, templateId) {
+async function submitFormWithSheetsId(sheetId, sheetName, templateId, testMode = false, testCount = 10) {
     try {
-        showLoading('Generating certificates from Google Sheets...');
+        const message = testMode ? `Testing with first ${testCount} certificates...` : 'Generating certificates from Google Sheets...';
+        showLoading(message);
         
         const formData = new FormData();
         formData.append('sheets_id', sheetId);
         formData.append('sheet_name', sheetName);
         formData.append('template_id', templateId);
         formData.append('output_folder', document.getElementById('outputFolder')?.value || 'Certificate Generator');
+        
+        // Add test mode parameters if needed
+        if (testMode) {
+            formData.append('test_mode', 'true');
+            formData.append('test_count', testCount);
+        }
         
         // Include filename field if selected
         const filenameField = document.getElementById('filenameField')?.value;
@@ -716,6 +827,7 @@ async function submitFormWithSheetsId(sheetId, sheetName, templateId) {
         }
         
         const result = await response.json();
+        const folderName = testMode ? 'Certificate Generator (TEST)' : document.getElementById('outputFolder')?.value || 'Certificate Generator';
         showSuccess('Success', result.message, `
             <p><strong>Results:</strong></p>
             <ul>
@@ -723,8 +835,13 @@ async function submitFormWithSheetsId(sheetId, sheetName, templateId) {
                 <li>Failed: ${result.summary.failed || 0}</li>
                 <li>Duration: ${result.summary.duration || 'N/A'}s</li>
             </ul>
-            <p>Certificates saved to your Google Drive!</p>
+            <p>Certificates saved to your Google Drive in "${folderName}"!</p>
         `);
+        
+        // Hide test count group after success
+        if (testMode) {
+            document.getElementById('testCountGroup').style.display = 'none';
+        }
     } catch (error) {
         hideLoading();
         showError('Error', error.message || 'Request failed');
