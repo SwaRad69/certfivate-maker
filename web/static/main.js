@@ -4,6 +4,7 @@
 let pickerApiLoaded = false;
 let pickerAuthToken = null;
 let csvFromDriveContent = null;  // Store CSV content when selected from Drive
+let selectedSheetsLoaded = false;  // Track if sheet tabs have been loaded
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', function() {
@@ -100,65 +101,66 @@ function setupEventListeners() {
         generateForm.addEventListener('submit', async function(e) {
             e.preventDefault();
             
-            // Get active tab
-            const sheetsTab = document.getElementById('sheets-tab');
-            const csvTab = document.getElementById('csv-tab');
-            const isGoogleSheetsActive = sheetsTab && sheetsTab.classList.contains('active');
+            // Get the actual data available, not just which tab looks active
+            const sheetId = document.getElementById('selectedSheetId').value;
+            const csvFile = document.getElementById('csvFile').files[0];
+            const templateId = document.getElementById('templateId').value.trim();
             
-            // Validate inputs based on active tab
-            if (isGoogleSheetsActive) {
-                // Check if it's a CSV file from Drive or a Google Sheet
-                const sheetId = document.getElementById('selectedSheetId').value;
-                
-                if (!sheetId) {
-                    showError('Error', 'Please select a Google Sheet or CSV file');
-                    return;
-                }
-                
-                const templateId = document.getElementById('templateId').value.trim();
-                if (!templateId) {
-                    showError('Error', 'Please enter template ID');
-                    return;
-                }
-                if (templateId.length < 20) {
-                    showError('Error', 'Template ID appears to be invalid (too short)');
-                    return;
-                }
+            console.log('Form submission - Available data:', { 
+                hasSheetId: !!sheetId, 
+                hasCSVFile: !!csvFile, 
+                hasTemplateId: !!templateId 
+            });
+            
+            // Validate template ID first (required in all cases)
+            if (!templateId) {
+                showError('Error', 'Please enter or select a template');
+                return;
+            }
+            if (templateId.length < 20) {
+                showError('Error', 'Template ID appears to be invalid (too short)');
+                return;
+            }
+            
+            // Determine which data source to use
+            // Priority: Google Sheet > CSV File > Error
+            if (sheetId) {
+                // User has selected a Google Sheet or Drive CSV
+                console.log('Using Google Sheets/Drive source');
                 
                 // Check if it's a CSV file from Drive
                 if (sheetId.startsWith('csv:')) {
                     // Submit CSV from Drive
+                    console.log('Submitting CSV from Drive');
+                    if (!csvFromDriveContent) {
+                        showError('Error', 'CSV content not loaded. Please reselect the CSV file.');
+                        return;
+                    }
                     await submitFormWithDriveCSV(csvFromDriveContent, templateId);
                 } else {
-                    // Regular Google Sheet
+                    // Regular Google Sheet - ensure sheets are loaded
+                    if (!selectedSheetsLoaded) {
+                        showError('Error', 'Sheet tabs are still loading. Please wait a moment and try again.');
+                        return;
+                    }
+                    
                     const sheetName = document.getElementById('sheetSelect').value;
+                    console.log('Submitting Google Sheet:', { sheetId, sheetName });
+                    
                     if (!sheetName) {
-                        showError('Error', 'Please select a sheet tab');
+                        showError('Error', 'Please select a sheet tab from the dropdown that appeared after selecting your Google Sheet.');
                         return;
                     }
                     await submitFormWithSheetsId(sheetId, sheetName, templateId);
                 }
-            } else {
-                // CSV upload tab
-                const csvFile = document.getElementById('csvFile').files[0];
-                const templateId = document.getElementById('templateId').value.trim();
-                
-                if (!csvFile) {
-                    showError('Error', 'Please select a CSV or Excel file');
-                    return;
-                }
-                
-                if (!templateId) {
-                    showError('Error', 'Please enter template ID');
-                    return;
-                }
-                
-                if (templateId.length < 20) {
-                    showError('Error', 'Template ID appears to be invalid (too short)');
-                    return;
-                }
-                
+            } else if (csvFile) {
+                // User uploaded a CSV file directly
+                console.log('Using uploaded CSV file');
                 await submitFormWithCSV(csvFile, templateId);
+            } else {
+                // No data source selected
+                showError('Error', 'Please either:\n1. Click "📊 Open Google Drive Picker" to select a Google Sheet or CSV file\n2. Click "Choose data file" to upload a CSV or Excel file');
+                return;
             }
         });
     }
@@ -236,6 +238,9 @@ function handlePickerResponse(data) {
         const mimeType = doc.mimeType || 'unknown';
         
         console.log('Picker selection:', { id: fileId, name: fileName, mimeType: mimeType });
+        
+        // Ensure sheets tab is active
+        switchTab('sheets');
         
         // Check if it's a CSV file
         if (mimeType === 'text/csv' || fileName.endsWith('.csv')) {
@@ -389,9 +394,12 @@ function populateDriveSheetTabs(sheets) {
     // Auto-select first sheet if available
     if (sheets.length > 0) {
         select.selectedIndex = 0;
+        selectedSheetsLoaded = true;  // Mark sheets as loaded
         const firstSheet = sheets[0].properties.title;
         const sheetId = document.getElementById('selectedSheetId').value;
         previewSheetData(sheetId, firstSheet);
+    } else {
+        selectedSheetsLoaded = false;
     }
 }
 

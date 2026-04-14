@@ -97,10 +97,14 @@ def login_required(f):
 
 @app.route('/')
 def index():
-    """Home page."""
+    """Landing page - shown to unauthenticated users."""
     if 'credentials' in session:
         return redirect(url_for('dashboard'))
-    return redirect(url_for('login'))
+    
+    # YouTube embed code (you can update this string or set it via environment variable)
+    youtube_embed = os.environ.get('YOUTUBE_EMBED', '')
+    
+    return render_template('landing.html', youtube_embed=youtube_embed)
 
 
 @app.route('/login')
@@ -286,6 +290,9 @@ def api_generate():
         # Determine data source: CSV file, Excel file, or Google Sheets
         csv_content = None
         
+        logger.info(f"Request files: {list(request.files.keys())}")
+        logger.info(f"Request form: {list(request.form.keys())}")
+        
         if 'csv_file' in request.files and request.files['csv_file'].filename:
             # Method 1: File upload - supports multiple formats
             uploaded_file = request.files['csv_file']
@@ -311,8 +318,10 @@ def api_generate():
             sheets_url = request.form.get('sheets_url', '').strip()
             sheet_name = request.form.get('sheet_name', '').strip()
             
+            logger.info(f"Google Sheets submission: sheets_id={sheets_id[:10]}..., sheet_name={sheet_name}")
+            
             if not sheet_name:
-                return jsonify({'error': 'Google Sheet name required'}), 400
+                return jsonify({'error': 'Google Sheet name/tab is required. Please select a sheet tab from the dropdown and try again.'}), 400
             
             # Get sheet ID from either direct ID or URL
             if sheets_id:
@@ -349,10 +358,11 @@ def api_generate():
                 return jsonify({'error': f'Failed to read Google Sheets: {str(e)}'}), 500
         
         else:
-            return jsonify({'error': 'Must provide CSV file or Google Sheets URL'}), 400
+            logger.warning(f"No valid data source provided. Files: {list(request.files.keys())}, Form keys with data: {[k for k in request.form.keys() if request.form.get(k)]}")
+            return jsonify({'error': 'No data source provided. Please either upload a CSV file OR select a Google Sheet and sheet tab.'}), 400
         
         if not csv_content:
-            return jsonify({'error': 'No data provided'}), 400
+            return jsonify({'error': 'No data could be extracted from the provided source'}), 400
         
         try:
             # Generate certificates with user's credentials
@@ -395,7 +405,7 @@ def logout():
     """Logout user and clear session."""
     session.clear()
     logger.info("User logged out")
-    return redirect(url_for('login'))
+    return redirect(url_for('index'))
 
 
 @app.route('/help')

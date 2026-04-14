@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+
+{% block title %}Certificate Generator - Create Bulk Certificates Instantly{% endblock %}
+
+{% block content %}
+<style>
+    .landing-page {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+    }
+    
+    .hero-section {
+        padding: 60px 20px;
+        text-align: center;
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+    
+    .hero-section h1 {
+        font-size: 3.5rem;
+        margin-bottom: 20px;
+        font-weight: bold;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+    }
+    
+    .hero-section .subtitle {
+        font-size: 1.3rem;
+        margin-bottom: 30px;
+        opacity: 0.95;
+    }
+    
+    .cta-button {
+        display: inline-block;
+        background: #fff;
+        color: #667eea;
+        padding: 15px 40px;
+        border-radius: 50px;
+        font-size: 1.1rem;
+        font-weight: bold;
+        text-decoration: none;
+        margin-top: 20px;
+        transition: transform 0.3s, box-shadow 0.3s;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    }
+    
+    .cta-button:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+    }
+    
+    .how-to-section {
+        background: #f5f7fa;
+        padding: 80px 20px;
+    }
+    
+    .how-to-section h2 {
+        text-align: center;
+        font-size: 2.5rem;
+        margin-bottom: 50px;
+        color: #333;
+    }
+    
+    .steps-container {
+        max-width: 1000px;
+        margin: 0 auto;
+    }
+    
+    .step {
+        display: flex;
+        gap: 30px;
+        margin-bottom: 40px;
+        align-items: flex-start;
+    }
+    
+    .step-number {
+        background: #667eea;
+        color: white;
+        width: 50px;
+        height: 50px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.5rem;
+        font-weight: bold;
+        flex-shrink: 0;
+    }
+    
+    .step-content h3 {
+        color: #333;
+        margin-bottom: 10px;
+        font-size: 1.3rem;
+    }
+    
+    .step-content p {
+        color: #666;
+        line-height: 1.6;
+    }
+    
+    .video-section {
+        background: white;
+        padding: 80px 20px;
+    }
+    
+    .video-section h2 {
+        text-align: center;
+        font-size: 2.5rem;
+        margin-bottom: 50px;
+        color: #667eea;
+    }
+    
+    .video-container {
+        max-width: 800px;
+        margin: 0 auto;
+    }
+    
+    .video-placeholder {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        background: #f0f0f0;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #999;
+        font-size: 1.2rem;
+        border: 2px dashed #ddd;
+    }
+    
+    .stats-section {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 60px 20px;
+    }
+    
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 30px;
+        max-width: 1000px;
+        margin: 0 auto;
+        text-align: center;
+    }
+    
+    .stat {
+        padding: 30px;
+    }
+    
+    .stat-number {
+        font-size: 3rem;
+        font-weight: bold;
+        margin-bottom: 10px;
+    }
+    
+    .stat-label {
+        font-size: 1.1rem;
+        opacity: 0.9;
+    }
+    
+    .footer-section {
+        background: #333;
+        color: white;
+        padding: 40px 20px;
+        text-align: center;
+    }
+    
+    .footer-section p {
+        margin: 10px 0;
+    }
+</style>
+
+<div class="landing-page">
+    <!-- Hero Section -->
+    <div class="hero-section">
+        <h1>🎓 Certificate Generator</h1>
+        <p class="subtitle">Create bulk certificates in seconds using Google Slides templates</p>
+        <p style="font-size: 1.05rem; margin-bottom: 20px;">Upload your participant data (CSV, Excel, JSON, etc.) and instantly generate personalized certificates for everyone!</p>
+        <a href="/login" class="cta-button">🚀 Get Started with Google</a>
+    </div>
+
+
+<!-- How to Use Section -->
+<div class="how-to-section">
+    <h2>📝 How to Use</h2>
+    <div class="steps-container">
+        <div class="step">
+            <div class="step-number">1</div>
+            <div class="step-content">
+                <h3>Create Your Template</h3>
+                <p>Design a certificate template in Google Slides. Add placeholders (like {{name}}, {{achievement}}) for the parts you want to customize.</p>
+            </div>
+        </div>
+        <div class="step">
+            <div class="step-number">2</div>
+            <div class="step-content">
+                <h3>Prepare Your Data</h3>
+                <p>Create a spreadsheet (Excel, Google Sheets, CSV, etc.) with columns matching your template placeholders. One row = one certificate.</p>
+            </div>
+        </div>
+        <div class="step">
+            <div class="step-number">3</div>
+            <div class="step-content">
+                <h3>Login & Upload</h3>
+                <p>Sign in with your Google account. Select your Google Slides template and upload your data file.</p>
+            </div>
+        </div>
+        <div class="step">
+            <div class="step-number">4</div>
+            <div class="step-content">
+                <h3>Generate & Download</h3>
+                <p>Click "Generate Certificates" and watch as all your certificates are created instantly and saved to Google Drive.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Video Section -->
+<div class="video-section">
+    <h2>📹 Video Tutorial</h2>
+    <div class="video-container">
+        <div id="video-embed">
+            {% if youtube_embed %}
+                {{ youtube_embed|safe }}
+            {% else %}
+                <div class="video-placeholder">
+                    ▶ Video tutorial coming soon
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Stats Section -->
+<div class="stats-section">
+    <div class="stats-grid">
+        <div class="stat">
+            <div class="stat-number">0s</div>
+            <div class="stat-label">Setup Time</div>
+        </div>
+        <div class="stat">
+            <div class="stat-number">100+</div>
+            <div class="stat-label">Certificates/Min</div>
+        </div>
+        <div class="stat">
+            <div class="stat-number">∞</div>
+            <div class="stat-label">Designs Supported</div>
+        </div>
+    </div>
+</div>
+
+<!-- Footer -->
+<div class="footer-section">
+    <p><strong>Ready to create certificates?</strong></p>
+    <a href="/login" class="cta-button" style="color: #667eea;">Sign in with Google</a>
+    <p style="margin-top: 30px; opacity: 0.8; font-size: 0.9rem;">© 2026 Certificate Generator | Powered by Google APIs | Privacy Policy</p>
+</div>
+
+{% endblock %}
