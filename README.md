@@ -1,5 +1,50 @@
 # Bulk Certificate Generator
 
+Generate bulk personalized certificates from a Canva-designed template in Google Slides using a CSV file. This tool automates creating individual PDFs with dynamic placeholders replaced by participant data.
+
+## 🚀 Try It Live
+
+**[👉 Open Certificate Generator](https://certfivate-maker.onrender.com)** — No installation needed, just sign in with Google!
+
+---
+
+## 📚 Documentation
+
+Full guides available in the [`readme/`](readme/) folder:
+
+- [Getting Started](readme/QUICK_START.md) — Quick setup and first run
+- [Setup Guide](readme/SETUP_GUIDE.md) — Detailed Google Cloud configuration  
+- [Template Design](readme/TEMPLATE_DESIGN_GUIDE.md) — How to design your certificate template
+- [Web App Guide](readme/WEB_APP_COMPLETE.md) — Using the web interface
+- [Deployment Guide](readme/WEB_DEPLOYMENT_GUIDE.md) — Deploy to production (Render)
+
+## Features
+
+✅ **Canva → Google Slides Workflow** — Design in Canva, export to Google Slides  
+✅ **Dynamic Placeholders** — Auto-detects `{{Placeholder}}` patterns  
+✅ **CSV-Driven** — Read participant data, generate one PDF per row  
+✅ **Bulk Export** — Generate 100–500+ certificates reliably  
+✅ **Web Interface** — User-friendly dashboard with Google OAuth  
+✅ **Google Drive Integration** — Save directly to your Drive  
+
+## Quick Start
+
+1. **Deploy Your Own** (free on Render):
+   
+   [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
+
+2. **Run Locally**:
+   ```bash
+   pip install -r requirements.txt
+   cd web
+   python app.py
+   ```
+
+## License
+
+MIT License - Feel free to use and modify!
+# Bulk Certificate Generator
+
 Generate bulk personalized certificates from a Canva-designed template in Google Slides using a CSV file. This tool automates the process of creating individual PDFs with dynamic placeholders replaced by participant data.
 
 ## Features
