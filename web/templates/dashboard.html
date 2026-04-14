@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+
+{% block title %}Generate Certificates - Certificate Generator{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <div class="dashboard-card">
+        <h2>Generate Bulk Certificates</h2>
+        <p class="subtitle">Upload your CSV and template ID to generate certificates directly to your Google Drive</p>
+
+        <form id="generateForm" class="form" enctype="multipart/form-data">
+            <!-- Tab Navigation -->
+            <div class="tabs">
+                <button type="button" class="tab-btn active" data-tab="sheets">📊 Google Sheets</button>
+                <button type="button" class="tab-btn" data-tab="csv">📄 CSV Upload</button>
+            </div>
+
+            <!-- Google Sheets Tab -->
+            <div id="sheets-tab" class="tab-content active">
+                <div class="form-group">
+                    <label class="label">📊 Select from Your Google Drive</label>
+                    <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                        <button type="button" id="openGooglePicker" class="btn btn-primary">
+                            📁 Open Google Drive Picker
+                        </button>
+                        <span id="selectedSheetName" style="padding: 10px; color: #666;">Click to browse...</span>
+                    </div>
+                    <input type="hidden" id="selectedSheetId" name="sheets_id" value="">
+                    <small>Opens Google's native file picker to select a spreadsheet from your Drive</small>
+                </div>
+
+                <div class="form-group" id="sheetTabsGroup" style="display: none;">
+                    <label for="sheetSelect" class="label">📋 Select Sheet Tab</label>
+                    <select id="sheetSelect" name="sheet_name" class="input">
+                        <option value="">Loading tabs...</option>
+                    </select>
+                    <small>Choose which tab contains your participant data</small>
+                </div>
+
+                <!-- Data Preview -->
+                <div id="previewContainer" class="preview-container" style="display: none;">
+                    <h3>📋 Data Preview</h3>
+                    <div class="preview-table-wrapper">
+                        <table class="preview-table" id="previewTable">
+                            <thead id="previewHead"></thead>
+                            <tbody id="previewBody"></tbody>
+                        </table>
+                    </div>
+                    <small id="rowCount">Total rows: 0</small>
+                </div>
+            </div>
+
+            <!-- CSV Upload Tab -->
+            <div id="csv-tab" class="tab-content">
+                <div class="form-group">
+                    <label for="csvFile" class="label">📄 CSV or Excel File</label>
+                    <div class="file-input-wrapper">
+                        <input 
+                            type="file" 
+                            id="csvFile" 
+                            name="csv_file" 
+                            accept=".csv,.xlsx,.xls"
+                            class="file-input"
+                        >
+                        <span class="file-input-text">Choose CSV or Excel file</span>
+                    </div>
+                    <small>Supports CSV (.csv), Excel (.xlsx, .xls) files with columns matching your template placeholders</small>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="templateId" class="label">🎪 Template ID</label>
+                <input 
+                    type="text" 
+                    id="templateId" 
+                    name="template_id" 
+                    placeholder="Paste Google Slides Template ID here"
+                    required
+                    class="input"
+                >
+                <small>Get this from your Google Slides URL: docs.google.com/presentation/d/<strong>TEMPLATE_ID</strong></small>
+            </div>
+
+            <div class="form-group">
+                <label for="outputFolder" class="label">📁 Output Folder (in Drive)</label>
+                <input 
+                    type="text" 
+                    id="outputFolder" 
+                    name="output_folder" 
+                    placeholder="Certificates" 
+                    value="Certificate Generator"
+                    class="input"
+                >
+                <small>Name of folder in your Drive where certificates will be saved</small>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-large">
+                Generate Certificates
+            </button>
+        </form>
+
+        <div id="progressContainer" style="display:none;">
+            <div class="progress-section">
+                <h3>Generating...</h3>
+                <div class="progress-bar">
+                    <div id="progressFill" class="progress-fill"></div>
+                </div>
+                <p id="progressText">Initializing...</p>
+            </div>
+        </div>
+
+        <div id="resultContainer" style="display:none;">
+            <div id="successResult" style="display:none;" class="result result-success">
+                <h3>✅ Success!</h3>
+                <p id="successMessage"></p>
+                <div id="successDetails"></div>
+                <button type="button" class="btn btn-secondary" onclick="location.reload()">
+                    Generate More
+                </button>
+            </div>
+
+            <div id="errorResult" style="display:none;" class="result result-error">
+                <h3>❌ Error</h3>
+                <p id="errorMessage"></p>
+                <button type="button" class="btn btn-secondary" onclick="location.reload()">
+                    Try Again
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="info-grid">
+        <div class="info-card">
+            <h3>📋 CSV Format</h3>
+            <p>Your CSV should have columns matching template placeholders:</p>
+            <pre>Name,Email,Date,Event
+John Doe,john@example.com,April 13 2024,Conference
+Jane Smith,jane@example.com,April 13 2024,Conference</pre>
+        </div>
+
+        <div class="info-card">
+            <h3>🎯 Template Requirements</h3>
+            <ul>
+                <li>Design certificate in Canva</li>
+                <li>Export as PPTX to Google Drive</li>
+                <li>Open in Google Slides</li>
+                <li>Add {{Placeholder}} text for dynamic fields</li>
+                <li>Copy Template ID from URL</li>
+            </ul>
+        </div>
+
+        <div class="info-card">
+            <h3>💾 Output Location</h3>
+            <p>Generated PDFs are automatically saved to your Google Drive in the specified folder.</p>
+            <p>No files are stored on our servers—everything stays in your Drive!</p>
+        </div>
+
+        <div class="info-card">
+            <h3>⚡ How It Works</h3>
+            <ol>
+                <li>Sign in with your Google account</li>
+                <li>Upload CSV with participant data</li>
+                <li>Paste your Google Slides template ID</li>
+                <li>Click Generate</li>
+                <li>Certificates appear in your Drive ✓</li>
+            </ol>
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('generateForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const csvFile = document.getElementById('csvFile').files[0];
+    const templateId = document.getElementById('templateId').value.trim();
+    const outputFolder = document.getElementById('outputFolder').value.trim();
+
+    if (!csvFile) {
+        alert('Please select a CSV file');
+        return;
+    }
+
+    if (!templateId) {
+        alert('Please enter template ID');
+        return;
+    }
+
+    // Show progress, hide form
+    document.getElementById('generateForm').style.display = 'none';
+    document.getElementById('progressContainer').style.display = 'block';
+    document.getElementById('resultContainer').style.display = 'none';
+
+    // Prepare form data
+    const formData = new FormData();
+    formData.append('csv_file', csvFile);
+    formData.append('template_id', templateId);
+    formData.append('output_folder', outputFolder);
+
+    try {
+        const response = await fetch('/api/generate', {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+            // Show success
+            document.getElementById('progressContainer').style.display = 'none';
+            document.getElementById('resultContainer').style.display = 'block';
+            document.getElementById('successResult').style.display = 'block';
+            document.getElementById('successMessage').textContent = data.message;
+
+            // Show summary
+            const summary = data.summary;
+            const details = `
+                <p>
+                    <strong>${summary.success}</strong> certificates generated successfully<br>
+                    ${summary.failed > 0 ? `<strong>${summary.failed}</strong> failed<br>` : ''}
+                </p>
+                <p style="color: #666; font-size: 0.9em;">
+                    Check your Google Drive in the "${outputFolder}" folder to download your certificates!
+                </p>
+            `;
+            document.getElementById('successDetails').innerHTML = details;
+        } else {
+            // Show error
+            document.getElementById('progressContainer').style.display = 'none';
+            document.getElementById('resultContainer').style.display = 'block';
+            document.getElementById('errorResult').style.display = 'block';
+            document.getElementById('errorMessage').textContent = data.error || 'Unknown error occurred';
+        }
+    } catch (error) {
+        document.getElementById('progressContainer').style.display = 'none';
+        document.getElementById('resultContainer').style.display = 'block';
+        document.getElementById('errorResult').style.display = 'block';
+        document.getElementById('errorMessage').textContent = 'Network error: ' + error.message;
+    }
+});
+
+// File input UI enhancement
+document.getElementById('csvFile').addEventListener('change', (e) => {
+    const filename = e.target.files[0]?.name || 'Choose CSV file';
+    document.querySelector('.file-input-text').textContent = filename;
+});
+</script>
+{% endblock %}

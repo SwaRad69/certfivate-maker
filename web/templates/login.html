@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Certificate Generator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-card">
+            <h1>🎓</h1>
+            <h1>Certificate Generator</h1>
+            <p>
+                Generate bulk personalized certificates from your Canva design.
+                Certificates are saved directly to your Google Drive.
+            </p>
+            
+            <a href="{{ url_for('login') }}" class="btn btn-primary">
+                Sign In with Google
+            </a>
+
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; color: #666; font-size: 12px;">
+                <p><strong>How it works:</strong></p>
+                <ol style="text-align: left; margin: 10px 0; padding-left: 15px;">
+                    <li>Design certificate in Canva</li>
+                    <li>Export to Google Drive as PPTX</li>
+                    <li>Add {{Placeholder}} in Google Slides</li>
+                    <li>Upload CSV and click Generate</li>
+                    <li>Certificates appear in your Drive</li>
+                </ol>
+            </div>
+
+            <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee; color: #999; font-size: 11px;">
+                <p>✅ Your data stays in your Google Drive</p>
+                <p>✅ We never store your files</p>
+                <p>✅ 100% secure and private</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

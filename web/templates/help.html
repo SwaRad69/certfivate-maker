@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+
+{% block title %}Help & Instructions - Certificate Generator{% endblock %}
+
+{% block content %}
+<div class="help-page">
+    <h2>Help & Instructions</h2>
+
+    <div class="help-section">
+        <h3>📚 Quick Start</h3>
+        <ol>
+            <li><strong>Design certificate</strong> in Canva with your branding</li>
+            <li><strong>Export to Google Drive</strong> as PPTX file</li>
+            <li><strong>Open in Google Slides</strong> and add {{Placeholder}} text</li>
+            <li><strong>Get Template ID</strong> from Google Slides URL</li>
+            <li><strong>Create CSV file</strong> with participant data</li>
+            <li><strong>Upload to this app</strong> and click Generate</li>
+            <li><strong>Download from Drive</strong> in the output folder</li>
+        </ol>
+    </div>
+
+    <div class="help-section">
+        <h3>🎨 Designing Your Template (Canva)</h3>
+        <p>Start by creating your certificate design in Canva:</p>
+        <ul>
+            <li>Add your logo, borders, and styling</li>
+            <li>Include text like "Certificate of Completion"</li>
+            <li>Leave space for participant name and details</li>
+            <li><strong>Export as PPTX</strong> (not PNG or PDF)</li>
+        </ul>
+    </div>
+
+    <div class="help-section">
+        <h3>🔗 Prepare Template in Google Slides</h3>
+        <ol>
+            <li>Upload your PPTX to Google Drive</li>
+            <li>Right-click → Open with → Google Slides</li>
+            <li>Google auto-converts it for you</li>
+            <li>Click on each text field that needs dynamic content</li>
+            <li>Replace with placeholders like: <code>{{Name}}</code>, <code>{{Email}}</code>, etc.</li>
+            <li><strong>Important:</strong> Placeholders must be created in Google Slides, not Canva</li>
+        </ol>
+
+        <h4>Placeholder Syntax</h4>
+        <p>Use double curly braces around field names:</p>
+        <ul>
+            <li><code>{{Name}}</code> → Replaced with participant name</li>
+            <li><code>{{Email}}</code> → Replaced with email address</li>
+            <li><code>{{Date}}</code> → Replaced with date</li>
+            <li><code>{{Any Custom Field}}</code> → Matches CSV column</li>
+        </ul>
+    </div>
+
+    <div class="help-section">
+        <h3>📋 CSV File Format</h3>
+        <p>Create a CSV (Excel) file with your participant data:</p>
+        
+        <pre>Name,Email,Date,Event
+John Doe,john@example.com,April 13 2024,Spring Conference
+Jane Smith,jane@example.com,April 13 2024,Spring Conference
+Bob Johnson,bob@example.com,April 13 2024,Spring Conference</pre>
+
+        <h4>Rules:</h4>
+        <ul>
+            <li>First row must be column headers</li>
+            <li>Column names must <strong>exactly match</strong> placeholder names (case-sensitive)</li>
+            <li>Each row = one certificate to generate</li>
+            <li>Use <strong>Name</strong> column for PDF filename</li>
+        </ul>
+    </div>
+
+    <div class="help-section">
+        <h3>🎯 Get Your Template ID</h3>
+        <ol>
+            <li>Open your template in Google Slides</li>
+            <li>Look at the URL in address bar:</li>
+            <li><code>https://docs.google.com/presentation/d/<strong>1abc2def3ghi4jkl5mno6pqr/</strong>edit</code></li>
+            <li>Copy the bold part (26+ character ID)</li>
+            <li>Paste into the "Template ID" field on this site</li>
+        </ol>
+    </div>
+
+    <div class="help-section">
+        <h3>⚡ Generate Certificates</h3>
+        <ol>
+            <li>Click "Generate Certificates" button on dashboard</li>
+            <li>Upload your CSV file</li>
+            <li>Paste your template ID</li>
+            <li>Optional: Change output folder name (default: "Certificate Generator")</li>
+            <li>Click "Generate"</li>
+            <li>Wait for completion (takes ~15-30 seconds per certificate)</li>
+            <li>Certificates automatically appear in your Google Drive folder</li>
+        </ol>
+
+        <h4>Processing Time</h4>
+        <ul>
+            <li>10 certificates: 3-5 minutes</li>
+            <li>50 certificates: 15-25 minutes</li>
+            <li>100 certificates: 30-50 minutes</li>
+        </ul>
+    </div>
+
+    <div class="help-section">
+        <h3>💾 Download Certificates</h3>
+        <p>After generation completes:</p>
+        <ol>
+            <li>Open Google Drive</li>
+            <li>Navigate to the output folder (e.g., "Certificate Generator")</li>
+            <li>Each PDF file is named: <strong>[Participant Name].pdf</strong></li>
+            <li>Download or share directly from Drive</li>
+        </ol>
+    </div>
+
+    <div class="help-section">
+        <h3>🔒 Privacy & Security</h3>
+        <ul>
+            <li>✅ You sign in with your own Google account</li>
+            <li>✅ Certificates are saved to your Drive, not our servers</li>
+            <li>✅ We never store your CSV data</li>
+            <li>✅ Your credentials are only used for Google Drive access</li>
+            <li>✅ All data stays within your Google account</li>
+        </ul>
+    </div>
+
+    <div class="help-section">
+        <h3>❓ Common Questions</h3>
+        
+        <h4>Q: Can I use different placeholder names?</h4>
+        <p>Yes! Just match your CSV column names to your template placeholders exactly.</p>
+
+        <h4>Q: What if I have extra columns in CSV?</h4>
+        <p>Extra columns are ignored. Only columns matching placeholders are used.</p>
+
+        <h4>Q: Can I add images to certificates?</h4>
+        <p>Yes! Add images to your Canva template before exporting. They'll appear in all certificates.</p>
+
+        <h4>Q: How many certificates can I generate?</h4>
+        <p>You can generate 100s or 1000s. Processing time depends on quantity and your internet speed.</p>
+
+        <h4>Q: Can I edit certificates after generation?</h4>
+        <p>Yes! PDFs are in your Drive, so you can download and edit them.</p>
+
+        <h4>Q: What if generation fails?</h4>
+        <p>Check the error message for details. Common issues:</p>
+        <ul>
+            <li>Template ID is incorrect</li>
+            <li>CSV column doesn't match placeholder name</li>
+            <li>Connection issue (wait and try again)</li>
+        </ul>
+
+        <h4>Q: Can I use this for multiple events?</h4>
+        <p>Yes! Create one template per event/type, then reuse with different CSV files.</p>
+    </div>
+
+    <div class="help-section">
+        <h3>🆘 Troubleshooting</h3>
+
+        <h4>Error: "Invalid template ID"</h4>
+        <ul>
+            <li>Check ID is 26+ characters</li>
+            <li>Verify it's from Google Slides (not Docs or Sheets)</li>
+            <li>Try copying the ID again from the URL</li>
+        </ul>
+
+        <h4>Error: "Missing CSV columns"</h4>
+        <ul>
+            <li>Check CSV column names match placeholders exactly (case-sensitive)</li>
+            <li>Example: <code>{{Name}}</code> requires "Name" column in CSV</li>
+            <li>Example: <code>{{email}}</code> requires "email" column (lowercase)</li>
+        </ul>
+
+        <h4>Certificates not appearing in Drive</h4>
+        <ul>
+            <li>Check the output folder name (default: "Certificate Generator")</li>
+            <li>Refresh Google Drive (F5)</li>
+            <li>Check generation completed successfully</li>
+        </ul>
+
+        <h4>Generation is slow</h4>
+        <ul>
+            <li>This is normal! Each certificate takes 15-30 seconds</li>
+            <li>Internet speed affects processing</li>
+            <li>Try during off-peak hours</li>
+        </ul>
+    </div>
+
+    <div class="help-section help-footer">
+        <p>Need more help? Check the README.md in the repository or contact support.</p>
+        <p>Ready to generate? <a href="{{ url_for('dashboard') }}" class="btn btn-primary">Go to Dashboard</a></p>
+    </div>
+</div>
+
+<style>
+.help-page {
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.help-section {
+    background: #f9f9f9;
+    border-left: 4px solid #4a90e2;
+    padding: 20px;
+    margin: 20px 0;
+    border-radius: 4px;
+}
+
+.help-section h3 {
+    margin-top: 0;
+    color: #333;
+}
+
+.help-section h4 {
+    margin-top: 15px;
+    color: #555;
+}
+
+.help-section ul, .help-section ol {
+    margin: 10px 0;
+    padding-left: 20px;
+}
+
+.help-section li {
+    margin: 8px 0;
+    line-height: 1.6;
+}
+
+.help-section code {
+    background: #fff;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Courier New', monospace;
+    color: #e74c3c;
+}
+
+.help-section pre {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 12px;
+    overflow-x: auto;
+    font-size: 0.9em;
+}
+
+.help-footer {
+    text-align: center;
+    border-left: none;
+    background: #e8f4f8;
+}
+
+.help-footer a {
+    margin-top: 10px;
+}
+</style>
+{% endblock %}
