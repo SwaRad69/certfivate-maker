@@ -53,32 +53,38 @@
             <!-- CSV Upload Tab -->
             <div id="csv-tab" class="tab-content">
                 <div class="form-group">
-                    <label for="csvFile" class="label">📄 CSV or Excel File</label>
+                    <label for="csvFile" class="label">📄 Data File</label>
                     <div class="file-input-wrapper">
                         <input 
                             type="file" 
                             id="csvFile" 
                             name="csv_file" 
-                            accept=".csv,.xlsx,.xls"
+                            accept=".csv,.txt,.tsv,.xlsx,.xls,.ods,.json,.jsonl"
                             class="file-input"
                         >
-                        <span class="file-input-text">Choose CSV or Excel file</span>
+                        <span class="file-input-text">Choose data file</span>
                     </div>
-                    <small>Supports CSV (.csv), Excel (.xlsx, .xls) files with columns matching your template placeholders</small>
+                    <small>Supports: CSV, TSV, Excel (.xlsx, .xls), ODS, JSON, JSON Lines, and plain text files. Files will be automatically converted to CSV format.</small>
                 </div>
             </div>
 
             <div class="form-group">
-                <label for="templateId" class="label">🎪 Template ID</label>
+                <label class="label">🎪 Template (Google Slides)</label>
+                <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                    <button type="button" id="openSlidePicker" class="btn btn-primary">
+                        📽️ Select Template from Drive
+                    </button>
+                    <span id="selectedTemplateName" style="padding: 10px; color: #666;">Click to browse...</span>
+                </div>
                 <input 
                     type="text" 
                     id="templateId" 
                     name="template_id" 
-                    placeholder="Paste Google Slides Template ID here"
+                    placeholder="Or paste Google Slides Template ID here"
                     required
                     class="input"
                 >
-                <small>Get this from your Google Slides URL: docs.google.com/presentation/d/<strong>TEMPLATE_ID</strong></small>
+                <small>Either select from Drive (click button above) or paste the Template ID from: docs.google.com/presentation/d/<strong>TEMPLATE_ID</strong></small>
             </div>
 
             <div class="form-group">

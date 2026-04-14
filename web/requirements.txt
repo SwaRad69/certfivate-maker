@@ -8,4 +8,5 @@ python-dotenv==1.0.0
 tqdm==4.66.2
 gunicorn==21.2.0
 openpyxl==3.1.2
-python-dotenv==1.0.0
+pandas==2.0.3
+odfpy==1.4.1

@@ -11,6 +11,9 @@ from datetime import datetime
 from pathlib import Path
 from io import BytesIO
 
+# Allow OAuth over HTTP for local development
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+
 from flask import Flask, render_template, redirect, url_for, request, session, jsonify, send_file
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -22,6 +25,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from generator import generate_certificates_oauth2
+from file_converter import convert_to_csv, get_supported_formats
 import config
 
 # Setup logging
@@ -70,16 +74,21 @@ def login_required(f):
         # Refresh credentials if needed
         creds_data = session.get('credentials')
         if creds_data:
-            # Parse JSON string if needed
-            if isinstance(creds_data, str):
-                creds_data = json.loads(creds_data)
-            
-            creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
-            
-            # Check if credentials need refresh
-            if creds.expired and creds.refresh_token:
-                creds.refresh(GoogleRequest())
-                session['credentials'] = creds.to_json()
+            try:
+                # Parse JSON string if needed
+                if isinstance(creds_data, str):
+                    creds_data = json.loads(creds_data)
+                
+                creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
+                
+                # Check if credentials need refresh
+                if creds.expired and creds.refresh_token:
+                    creds.refresh(GoogleRequest())
+                    session['credentials'] = creds.to_json()
+            except ValueError:
+                # Credentials format invalid, redirect to login
+                session.clear()
+                return redirect(url_for('login'))
         
         return f(*args, **kwargs)
     
@@ -100,9 +109,12 @@ def login():
     flow = get_flow()
     authorization_url, state = flow.authorization_url(
         access_type='offline',
-        include_granted_scopes='true'
+        include_granted_scopes='true',
+        prompt='consent'  # Force consent screen to get refresh token
     )
     session['oauth_state'] = state
+    # Store code_verifier to recover in callback (for PKCE)
+    session['oauth_code_verifier'] = flow.code_verifier
     return redirect(authorization_url)
 
 
@@ -123,9 +135,12 @@ def oauth_callback():
         return jsonify({'error': f'OAuth error: {error}'}), 400
     
     try:
-        # Exchange code for credentials
+        # Recreate flow and restore code_verifier for PKCE
         flow = get_flow()
-        flow.fetch_token(code=code)
+        flow.code_verifier = session.get('oauth_code_verifier')
+        
+        # Use the full authorization response URL
+        flow.fetch_token(authorization_response=request.url)
         creds = flow.credentials
         
         # Store credentials in session
@@ -153,6 +168,88 @@ def oauth_callback():
 def dashboard():
     """Main dashboard after login."""
     return render_template('dashboard.html', user_email=session.get('user_email'))
+
+
+@app.route('/api/supported-formats')
+@login_required
+def api_supported_formats():
+    """Get list of supported file formats."""
+    formats = get_supported_formats()
+    return jsonify({
+        'formats': formats,
+        'supported_extensions': list(formats.keys())
+    })
+
+
+@app.route('/api/drive/file/<file_id>/csv', methods=['GET'])
+@login_required
+def api_drive_file_to_csv(file_id):
+    """Download a file from Google Drive and convert to CSV."""
+    try:
+        # Get user credentials
+        creds_data = session.get('credentials')
+        if isinstance(creds_data, str):
+            creds_data = json.loads(creds_data)
+        creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
+        
+        # Refresh credentials if needed
+        if creds.expired and creds.refresh_token:
+            creds.refresh(GoogleRequest())
+            session['credentials'] = creds.to_json()
+        
+        # Get Drive API service
+        from googleapiclient.discovery import build
+        drive_service = build('drive', 'v3', credentials=creds)
+        
+        logger.info(f"Downloading file {file_id} from Drive")
+        
+        # Get file metadata
+        file_info = drive_service.files().get(
+            fileId=file_id,
+            fields='id,name,mimeType,trashed'
+        ).execute()
+        
+        if file_info.get('trashed'):
+            return jsonify({'error': 'This file has been deleted'}), 410
+        
+        filename = file_info.get('name', 'file')
+        mime_type = file_info.get('mimeType', '')
+        
+        logger.info(f"File info: {filename}, MIME type: {mime_type}")
+        
+        # Download file content
+        request = drive_service.files().get_media(fileId=file_id)
+        file_bytes = request.execute()
+        
+        # Convert to CSV
+        try:
+            csv_content = convert_to_csv(file_bytes, filename)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+        
+        # Count rows
+        rows = csv_content.strip().split('\n')
+        rows_count = max(0, len(rows) - 1)  # Subtract header row
+        
+        logger.info(f"Successfully converted {filename} to CSV ({rows_count} data rows)")
+        
+        return jsonify({
+            'csv_content': csv_content,
+            'filename': filename,
+            'rows_count': rows_count,
+            'mime_type': mime_type
+        }), 200
+        
+    except Exception as e:
+        error_str = str(e)
+        logger.error(f"Error downloading file {file_id}: {error_str}")
+        
+        if '404' in error_str or 'not found' in error_str.lower():
+            return jsonify({'error': 'File not found. It may have been deleted.'}), 404
+        elif '403' in error_str or 'permission' in error_str.lower():
+            return jsonify({'error': 'You do not have permission to access this file'}), 403
+        else:
+            return jsonify({'error': f'Failed to download file: {error_str}'}), 500
 
 
 @app.route('/api/generate', methods=['POST'])
@@ -190,38 +287,22 @@ def api_generate():
         csv_content = None
         
         if 'csv_file' in request.files and request.files['csv_file'].filename:
-            # Method 1: CSV or Excel file upload
+            # Method 1: File upload - supports multiple formats
             uploaded_file = request.files['csv_file']
-            filename = uploaded_file.filename.lower()
+            filename = uploaded_file.filename
             
-            # Handle Excel files
-            if filename.endswith(('.xlsx', '.xls')):
-                try:
-                    import pandas as pd
-                    from io import BytesIO
-                    
-                    # Read Excel file using pandas
-                    excel_data = BytesIO(uploaded_file.read())
-                    df = pd.read_excel(excel_data)
-                    
-                    # Convert to CSV format
-                    csv_content = df.to_csv(index=False)
-                    logger.info(f"Loaded Excel file with {len(df)} rows")
-                    
-                except Exception as e:
-                    logger.error(f"Error reading Excel file: {e}")
-                    return jsonify({'error': f'Failed to read Excel file: {str(e)}'}), 400
-            
-            # Handle CSV files
-            elif filename.endswith('.csv'):
-                try:
-                    csv_content = uploaded_file.read().decode('utf-8')
-                except Exception as e:
-                    logger.error(f"Error reading CSV file: {e}")
-                    return jsonify({'error': f'Failed to read CSV file: {str(e)}'}), 400
-            
-            else:
-                return jsonify({'error': 'File must be CSV or Excel format (.csv, .xlsx, .xls)'}), 400
+            try:
+                file_bytes = uploaded_file.read()
+                csv_content = convert_to_csv(file_bytes, filename)
+                logger.info(f"Successfully converted file '{filename}' to CSV")
+                
+            except ValueError as e:
+                logger.error(f"File conversion error: {e}")
+                supported = ', '.join(get_supported_formats().keys())
+                return jsonify({'error': f'{str(e)}. Supported formats: {supported}'}), 400
+            except Exception as e:
+                logger.error(f"Error processing file: {e}")
+                return jsonify({'error': f'Failed to process file: {str(e)}'}), 400
             
             
         elif request.form.get('sheets_id') or request.form.get('sheets_url'):
@@ -408,23 +489,61 @@ def api_drive_sheets():
 def api_drive_sheet_names(sheet_id):
     """Get sheet names (tabs) from a Google Sheet."""
     try:
+        # Validate sheet_id format (should be alphanumeric and dashes)
+        if not sheet_id or len(sheet_id) < 20:
+            return jsonify({'error': 'Invalid spreadsheet ID format'}), 400
+        
         # Get user credentials
         creds_data = session.get('credentials')
         if isinstance(creds_data, str):
             creds_data = json.loads(creds_data)
         creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
         
-        # Get Sheets API service
+        # Refresh credentials if needed
+        if creds.expired and creds.refresh_token:
+            creds.refresh(GoogleRequest())
+            session['credentials'] = creds.to_json()
+        
+        # Get Drive API service to check file type
         from googleapiclient.discovery import build
+        drive_service = build('drive', 'v3', credentials=creds)
         sheets_service = build('sheets', 'v4', credentials=creds)
         
-        # Get spreadsheet metadata
+        logger.info(f"Fetching sheet names for ID: {sheet_id}")
+        
+        # First, check if file exists and get its MIME type
+        try:
+            file_info = drive_service.files().get(
+                fileId=sheet_id,
+                fields='id,name,mimeType,trashed'
+            ).execute()
+            
+            logger.info(f"File info: {file_info}")
+            
+            if file_info.get('trashed'):
+                return jsonify({'error': 'This spreadsheet has been deleted'}), 410
+            
+            mime_type = file_info.get('mimeType', '')
+            if 'spreadsheet' not in mime_type:
+                return jsonify({'error': f'This file is not a Google Sheet (type: {mime_type}). Please select a Google Sheets document.'}), 400
+                
+        except Exception as e:
+            logger.error(f"Error checking file info: {e}")
+            return jsonify({'error': 'Could not access this file. It may have been deleted or you do not have permission.'}), 403
+        
+        # Get spreadsheet metadata with explicit fields
         spreadsheet = sheets_service.spreadsheets().get(
-            spreadsheetId=sheet_id
+            spreadsheetId=sheet_id,
+            fields='sheets/properties'
         ).execute()
         
         sheets = spreadsheet.get('sheets', [])
+        
+        if not sheets:
+            return jsonify({'error': 'Spreadsheet has no sheets'}), 400
+        
         sheet_names = [s['properties']['title'] for s in sheets]
+        logger.info(f"Found {len(sheets)} sheets: {sheet_names}")
         
         return jsonify({
             'sheets': sheets,
@@ -432,8 +551,16 @@ def api_drive_sheet_names(sheet_id):
         }), 200
     
     except Exception as e:
-        logger.error(f"Error getting sheet names: {e}")
-        return jsonify({'error': f'Failed to get sheet names: {str(e)}'}), 500
+        error_str = str(e)
+        logger.error(f"Error getting sheet names for {sheet_id}: {error_str}")
+        
+        # Provide user-friendly error messages
+        if '400' in error_str or 'invalid' in error_str.lower():
+            return jsonify({'error': 'Invalid spreadsheet ID or the file cannot be accessed. Please try selecting a different Google Sheet.'}), 400
+        elif '403' in error_str or 'permission' in error_str.lower():
+            return jsonify({'error': 'You do not have permission to access this spreadsheet'}), 403
+        else:
+            return jsonify({'error': f'Failed to load sheet: {error_str}'}), 500
 @login_required
 def api_sheets_list():
     """List all sheets in a Google Sheets workbook."""

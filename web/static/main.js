@@ -3,6 +3,7 @@
 // Google Picker API key and credentials
 let pickerApiLoaded = false;
 let pickerAuthToken = null;
+let csvFromDriveContent = null;  // Store CSV content when selected from Drive
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', function() {
@@ -63,6 +64,12 @@ function setupEventListeners() {
     if (openPickerButton) {
         openPickerButton.addEventListener('click', openGooglePicker);
     }
+    
+    // Open Slide Picker button
+    const openSlidePickerButton = document.getElementById('openSlidePicker');
+    if (openSlidePickerButton) {
+        openSlidePickerButton.addEventListener('click', openSlidePicker);
+    }
 
     // File input
     const fileInput = document.getElementById('csvFile');
@@ -100,34 +107,39 @@ function setupEventListeners() {
             
             // Validate inputs based on active tab
             if (isGoogleSheetsActive) {
-                // Google Sheets validation
+                // Check if it's a CSV file from Drive or a Google Sheet
                 const sheetId = document.getElementById('selectedSheetId').value;
-                const sheetName = document.getElementById('sheetSelect').value;
-                const templateId = document.getElementById('templateId').value.trim();
                 
                 if (!sheetId) {
-                    showError('Error', 'Please select a Google Sheet');
+                    showError('Error', 'Please select a Google Sheet or CSV file');
                     return;
                 }
                 
-                if (!sheetName) {
-                    showError('Error', 'Please select a sheet tab');
-                    return;
-                }
-                
+                const templateId = document.getElementById('templateId').value.trim();
                 if (!templateId) {
                     showError('Error', 'Please enter template ID');
                     return;
                 }
-                
                 if (templateId.length < 20) {
                     showError('Error', 'Template ID appears to be invalid (too short)');
                     return;
                 }
                 
-                await submitFormWithSheetsId(sheetId, sheetName, templateId);
+                // Check if it's a CSV file from Drive
+                if (sheetId.startsWith('csv:')) {
+                    // Submit CSV from Drive
+                    await submitFormWithDriveCSV(csvFromDriveContent, templateId);
+                } else {
+                    // Regular Google Sheet
+                    const sheetName = document.getElementById('sheetSelect').value;
+                    if (!sheetName) {
+                        showError('Error', 'Please select a sheet tab');
+                        return;
+                    }
+                    await submitFormWithSheetsId(sheetId, sheetName, templateId);
+                }
             } else {
-                // CSV validation
+                // CSV upload tab
                 const csvFile = document.getElementById('csvFile').files[0];
                 const templateId = document.getElementById('templateId').value.trim();
                 
@@ -159,9 +171,10 @@ function openGooglePicker() {
         return;
     }
     
-    // Create Picker with Google Sheets view
+    // Create Picker with both Spreadsheets and CSV support
     const picker = new google.picker.PickerBuilder()
-        .addView(google.picker.ViewId.SPREADSHEETS)
+        .addView(google.picker.ViewId.SPREADSHEETS)  // Google Sheets
+        .addView(new google.picker.DocsUploadView())  // All files (for CSV)
         .setOAuthToken(pickerAuthToken)
         .setCallback(handlePickerResponse)
         .build();
@@ -169,31 +182,185 @@ function openGooglePicker() {
     picker.setVisible(true);
 }
 
+function openSlidePicker() {
+    // Check if API is loaded
+    if (!pickerApiLoaded) {
+        showError('Error', 'Google Picker is still loading. Please try again.');
+        return;
+    }
+    
+    // Create Picker for Google Presentations (Slides) only
+    const picker = new google.picker.PickerBuilder()
+        .addView(google.picker.ViewId.PRESENTATIONS)  // Google Slides/Presentations
+        .setOAuthToken(pickerAuthToken)
+        .setCallback(handleSlidePickerResponse)
+        .build();
+    
+    picker.setVisible(true);
+}
+
+function handleSlidePickerResponse(data) {
+    const action = data[google.picker.Response.ACTION];
+    
+    if (action === google.picker.Action.PICKED) {
+        const doc = data[google.picker.Response.DOCUMENTS][0];
+        const slideId = doc.id;
+        const slideName = doc.name;
+        const mimeType = doc.mimeType || 'unknown';
+        
+        console.log('Slide picker selection:', { id: slideId, name: slideName, mimeType: mimeType });
+        
+        // Validate it's a presentation
+        if (!mimeType.includes('presentation')) {
+            showError('Error', `Selected file is not a Google Slide (${mimeType}). Please select a Google Slides presentation.`);
+            return;
+        }
+        
+        // Set the template ID and display name
+        document.getElementById('templateId').value = slideId;
+        document.getElementById('selectedTemplateName').textContent = `✓ ${slideName}`;
+        
+        console.log('Template selected:', slideName);
+    } else if (action === google.picker.Action.CANCEL) {
+        console.log('Slide picker cancelled');
+    }
+}
+
 function handlePickerResponse(data) {
     const action = data[google.picker.Response.ACTION];
     
     if (action === google.picker.Action.PICKED) {
         const doc = data[google.picker.Response.DOCUMENTS][0];
-        const sheetId = doc.id;
-        const sheetName = doc.name;
+        const fileId = doc.id;
+        const fileName = doc.name;
+        const mimeType = doc.mimeType || 'unknown';
         
-        // Store selected sheet
-        document.getElementById('selectedSheetId').value = sheetId;
-        document.getElementById('selectedSheetName').textContent = `✓ ${sheetName}`;
+        console.log('Picker selection:', { id: fileId, name: fileName, mimeType: mimeType });
         
-        // Load sheet tabs
-        loadSheetTabs(sheetId);
+        // Check if it's a CSV file
+        if (mimeType === 'text/csv' || fileName.endsWith('.csv')) {
+            // Handle CSV file - download and use directly
+            downloadAndUseCsvFile(fileId, fileName);
+            return;
+        }
+        
+        // Check if it's a Google Sheet
+        if (!mimeType.includes('spreadsheet')) {
+            showError('Error', `Selected file is not supported (${mimeType}). Please select either a Google Sheet or a CSV file.`);
+            return;
+        }
+        
+        // It's a Google Sheet - load sheet tabs
+        document.getElementById('selectedSheetId').value = fileId;
+        document.getElementById('selectedSheetName').textContent = `✓ ${fileName}`;
+        loadSheetTabs(fileId);
     } else if (action === google.picker.Action.CANCEL) {
         console.log('Picker cancelled');
     }
 }
 
+async function downloadAndUseCsvFile(fileId, fileName) {
+    try {
+        console.log('Downloading CSV file:', fileName);
+        
+        // Use Google Drive API to export file as CSV
+        const response = await fetch(`/api/drive/file/${fileId}/csv`, {
+            method: 'GET'
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            showError('Error', errorData.error || 'Failed to download CSV file');
+            return;
+        }
+        
+        const data = await response.json();
+        
+        // Store CSV content for form submission
+        csvFromDriveContent = data.csv_content;
+        
+        // Show file info and populate CSV content
+        document.getElementById('selectedSheetId').value = `csv:${fileId}`;  // Mark as CSV
+        document.getElementById('selectedSheetName').textContent = `✓ ${fileName} (CSV)`;
+        
+        // Show preview
+        populateCsvPreview(data.csv_content, data.rows_count);
+        
+        // Show sheet tabs group as info
+        const sheetTabsGroup = document.getElementById('sheetTabsGroup');
+        sheetTabsGroup.innerHTML = `<div class="form-group"><small>CSV file selected: ${data.rows_count} data rows</small></div>`;
+        sheetTabsGroup.style.display = 'block';
+        
+        // Show preview container
+        showCsvPreview(data.csv_content);
+        
+    } catch (error) {
+        console.error('Error downloading CSV file:', error);
+        showError('Error', 'Failed to download CSV file. Check your internet connection.');
+    }
+}
+
+function populateCsvPreview(csvContent, rowCount) {
+    console.log(`CSV preview: ${rowCount} rows`);
+}
+
+function showCsvPreview(csvContent) {
+    // Parse CSV and show preview
+    const lines = csvContent.trim().split('\n').slice(0, 6);  // First 5 rows + header
+    const rows = lines.map(line => {
+        // Simple CSV parsing (handles basic cases)
+        return line.split(',').map(cell => cell.trim());
+    });
+    
+    const previewContainer = document.getElementById('previewContainer');
+    const previewHead = document.getElementById('previewHead');
+    const previewBody = document.getElementById('previewBody');
+    const rowCount = document.getElementById('rowCount');
+    
+    // Clear existing
+    previewHead.innerHTML = '';
+    previewBody.innerHTML = '';
+    
+    if (rows.length > 0) {
+        // Header row
+        const headerRow = document.createElement('tr');
+        rows[0].forEach(cell => {
+            const th = document.createElement('th');
+            th.textContent = cell;
+            headerRow.appendChild(th);
+        });
+        previewHead.appendChild(headerRow);
+        
+        // Data rows
+        rows.slice(1).forEach(row => {
+            const tr = document.createElement('tr');
+            row.forEach(cell => {
+                const td = document.createElement('td');
+                td.textContent = cell;
+                tr.appendChild(td);
+            });
+            previewBody.appendChild(tr);
+        });
+    }
+    
+    previewContainer.style.display = 'block';
+}
+
 async function loadSheetTabs(sheetId) {
     try {
+        console.log('Loading sheet tabs for ID:', sheetId);
+        
+        if (!sheetId || sheetId.length < 20) {
+            showError('Error', 'Invalid spreadsheet ID format');
+            return;
+        }
+        
         const response = await fetch(`/api/drive/sheets/${sheetId}/names`);
         
         if (!response.ok) {
-            showError('Error', 'Failed to load sheet tabs. Make sure this is a Google Sheets document.');
+            const errorData = await response.json();
+            const errorMsg = errorData.error || `HTTP ${response.status}`;
+            showError('Error', errorMsg);
             return;
         }
         
@@ -201,7 +368,7 @@ async function loadSheetTabs(sheetId) {
         populateDriveSheetTabs(data.sheets);
     } catch (error) {
         console.error('Error loading sheet tabs:', error);
-        showError('Error', 'Failed to load sheet tabs');
+        showError('Error', 'Failed to load sheet tabs. Check your internet connection and try again.');
     }
 }
 
@@ -335,6 +502,49 @@ function displayPreview(headers, rows, totalRows) {
     
     rowCount.textContent = `Total rows: ${totalRows}`;
     previewDiv.style.display = 'block';
+}
+
+// Submit form with CSV content from Google Drive
+async function submitFormWithDriveCSV(csvContent, templateId) {
+    try {
+        showLoading('Generating certificates from CSV file...');
+        
+        // Create a Blob from CSV content and convert to File object
+        const csvBlob = new Blob([csvContent], { type: 'text/csv' });
+        const csvFile = new File([csvBlob], 'data.csv', { type: 'text/csv' });
+        
+        const formData = new FormData();
+        formData.append('csv_file', csvFile);
+        formData.append('template_id', templateId);
+        formData.append('output_folder', document.getElementById('outputFolder')?.value || 'Certificate Generator');
+        
+        const response = await fetch('/api/generate', {
+            method: 'POST',
+            body: formData
+        });
+        
+        hideLoading();
+        
+        if (!response.ok) {
+            const error = await response.json();
+            showError('Error', error.error || 'Failed to generate certificates');
+            return;
+        }
+        
+        const result = await response.json();
+        showSuccess('Success', result.message, `
+            <p><strong>Results:</strong></p>
+            <ul>
+                <li>Generated: ${result.summary.success || 0}</li>
+                <li>Failed: ${result.summary.failed || 0}</li>
+                <li>Duration: ${result.summary.duration || 'N/A'}s</li>
+            </ul>
+            <p>Certificates saved to your Google Drive!</p>
+        `);
+    } catch (error) {
+        hideLoading();
+        showError('Error', error.message || 'Request failed');
+    }
 }
 
 // Submit form with CSV file
