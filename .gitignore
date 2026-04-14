@@ -3,10 +3,9 @@
 .env.local
 .env.*.local
 
-# Credentials & Secrets
+# Credentials & Secrets - NEVER COMMIT THESE
 credentials.json
 client_secrets.json
-*.json
 *.pem
 *.key
 

@@ -222,9 +222,88 @@ function handleSlidePickerResponse(data) {
         document.getElementById('templateId').value = slideId;
         document.getElementById('selectedTemplateName').textContent = `✓ ${slideName}`;
         
+        // Detect placeholders in the template
+        detectTemplatePlaceholders(slideId);
+        
         console.log('Template selected:', slideName);
     } else if (action === google.picker.Action.CANCEL) {
         console.log('Slide picker cancelled');
+    }
+}
+
+async function detectTemplatePlaceholders(templateId) {
+    try {
+        console.log('Detecting placeholders in template:', templateId);
+        
+        const response = await fetch('/api/template/placeholders', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ template_id: templateId })
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            console.warn('Could not detect placeholders:', errorData.error);
+            // Don't show error to user - this is optional functionality
+            // Just use default behavior
+            return;
+        }
+        
+        const data = await response.json();
+        const placeholders = data.placeholders || [];
+        
+        console.log('Detected placeholders:', placeholders);
+        
+        // Show placeholder selector if we found any
+        if (placeholders.length > 0) {
+            showFilenamePlaceholderSelector(placeholders);
+        }
+    } catch (error) {
+        console.error('Error detecting placeholders:', error);
+        // Don't show error to user - this is optional functionality
+    }
+}
+
+function showFilenamePlaceholderSelector(placeholders) {
+    // Create or get the filename field selector container
+    let selectorContainer = document.getElementById('filenamePlaceholderSelector');
+    
+    if (!selectorContainer) {
+        // Create the container if it doesn't exist
+        // Insert it right before the output folder form group
+        const outputFolderGroup = document.querySelector('label[for="outputFolder"]')?.closest('.form-group');
+        if (outputFolderGroup && outputFolderGroup.parentElement) {
+            selectorContainer = document.createElement('div');
+            selectorContainer.id = 'filenamePlaceholderSelector';
+            selectorContainer.className = 'form-group';
+            outputFolderGroup.parentElement.insertBefore(selectorContainer, outputFolderGroup);
+        } else {
+            // Fallback: create it but don't insert (it will show an error)
+            console.error('Could not find output folder element to insert placeholder selector');
+            return;
+        }
+    }
+    
+    // Build the selector HTML
+    let selectOptions = '';
+    placeholders.forEach(placeholder => {
+        selectOptions += `<option value="${placeholder}">${placeholder}</option>`;
+    });
+    
+    selectorContainer.innerHTML = `
+        <label for="filenameField" class="label">📄 Certificate Filename Field</label>
+        <select id="filenameField" name="filename_field" class="input">
+            <option value="">-- Select field to use for filenames --</option>
+            ${selectOptions}
+        </select>
+        <small>Choose which field from your data will be used to name the generated certificates. If not selected, the system will use the "Name" field from your data.</small>
+    `;
+    
+    // Select first placeholder by default
+    if (placeholders.length > 0) {
+        document.getElementById('filenameField').value = placeholders[0];
     }
 }
 
@@ -526,6 +605,12 @@ async function submitFormWithDriveCSV(csvContent, templateId) {
         formData.append('template_id', templateId);
         formData.append('output_folder', document.getElementById('outputFolder')?.value || 'Certificate Generator');
         
+        // Include filename field if selected
+        const filenameField = document.getElementById('filenameField')?.value;
+        if (filenameField) {
+            formData.append('filename_field', filenameField);
+        }
+        
         const response = await fetch('/api/generate', {
             method: 'POST',
             body: formData
@@ -564,6 +649,12 @@ async function submitFormWithCSV(csvFile, templateId) {
         formData.append('csv_file', csvFile);
         formData.append('template_id', templateId);
         formData.append('output_folder', document.getElementById('outputFolder')?.value || 'Certificate Generator');
+        
+        // Include filename field if selected
+        const filenameField = document.getElementById('filenameField')?.value;
+        if (filenameField) {
+            formData.append('filename_field', filenameField);
+        }
         
         const response = await fetch('/api/generate', {
             method: 'POST',
@@ -604,6 +695,12 @@ async function submitFormWithSheetsId(sheetId, sheetName, templateId) {
         formData.append('sheet_name', sheetName);
         formData.append('template_id', templateId);
         formData.append('output_folder', document.getElementById('outputFolder')?.value || 'Certificate Generator');
+        
+        // Include filename field if selected
+        const filenameField = document.getElementById('filenameField')?.value;
+        if (filenameField) {
+            formData.append('filename_field', filenameField);
+        }
         
         const response = await fetch('/api/generate', {
             method: 'POST',

@@ -108,8 +108,8 @@ def index():
     if 'credentials' in session:
         return redirect(url_for('dashboard'))
     
-    # YouTube embed code (you can update this string or set it via environment variable)
-    youtube_embed = os.environ.get('YOUTUBE_EMBED', '')
+    # YouTube embed code
+    youtube_embed = '<iframe width="100%" height="400" src="https://www.youtube.com/embed/gqEz11eXf_A?si=a2FCw2tbD4Gqgamu" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen style="border-radius: 10px;"></iframe>'
     
     return render_template('landing.html', youtube_embed=youtube_embed)
 
@@ -263,6 +263,59 @@ def api_drive_file_to_csv(file_id):
             return jsonify({'error': f'Failed to download file: {error_str}'}), 500
 
 
+@app.route('/api/template/placeholders', methods=['POST'])
+@login_required
+def get_template_placeholders():
+    """
+    Detect placeholders in a template and return them.
+    Allows user to choose which placeholder to use for certificate names.
+    """
+    try:
+        template_id = request.json.get('template_id', '').strip()
+        
+        if not template_id or len(template_id) < 20:
+            return jsonify({'error': 'Invalid template ID'}), 400
+        
+        # Get credentials
+        creds_data = session.get('credentials')
+        if not creds_data:
+            return jsonify({'error': 'Not authenticated'}), 401
+        
+        if isinstance(creds_data, str):
+            creds_data = json.loads(creds_data)
+        
+        creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
+        
+        # Refresh if needed
+        if creds.expired and creds.refresh_token:
+            creds.refresh(GoogleRequest())
+            session['credentials'] = creds.to_json()
+        
+        # Build Slides service
+        from googleapiclient.discovery import build
+        slides_service = build('slides', 'v1', credentials=creds)
+        
+        # Import and use the detector
+        from generator import detect_placeholders_in_slide
+        
+        try:
+            placeholders = detect_placeholders_in_slide(slides_service, template_id)
+            
+            return jsonify({
+                'success': True,
+                'placeholders': sorted(list(placeholders)),
+                'message': 'Select which field to use for certificate filenames'
+            })
+        
+        except Exception as e:
+            logger.error(f"Failed to detect placeholders: {e}")
+            return jsonify({'error': f'Failed to detect template placeholders: {str(e)}'}), 400
+    
+    except Exception as e:
+        logger.error(f"Error in get_template_placeholders: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/generate', methods=['POST'])
 @login_required
 def api_generate():
@@ -289,6 +342,7 @@ def api_generate():
         # Get form data
         template_id = request.form.get('template_id', '').strip()
         output_folder = request.form.get('output_folder', 'Certificate Generator').strip()
+        filename_field = request.form.get('filename_field', 'Name').strip()
         
         # Validate template ID
         if not template_id or len(template_id) < 20:
@@ -381,7 +435,8 @@ def api_generate():
                 csv_content=csv_content,
                 template_id=template_id,
                 output_folder=output_folder,
-                user_credentials=creds
+                user_credentials=creds,
+                filename_field=filename_field
             )
             
             logger.info(f"Generation complete: {summary}")

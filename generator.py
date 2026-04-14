@@ -163,8 +163,10 @@ def detect_placeholders_in_slide(slides_service, presentation_id: str) -> Set[st
                                 text_elems = cell.get('textElements', [])
                             extract_from_text_elements(text_elems)
         
-        logging.info(f"Detected placeholders: {placeholders}")
-        return placeholders
+        # Normalize placeholders to lowercase for case-insensitive matching
+        normalized_placeholders = {p.lower() for p in placeholders}
+        logging.info(f"Detected placeholders: {normalized_placeholders}")
+        return normalized_placeholders
         
     except Exception as e:
         logging.error(f"Failed to detect placeholders: {e}")
@@ -207,10 +209,11 @@ def read_csv(file_path: str) -> List[Dict]:
 def validate_csv_placeholders(csv_rows: List[Dict], detected_placeholders: Set[str]) -> Tuple[bool, List[str]]:
     """
     Validate that CSV columns match detected placeholders.
+    Case-insensitive matching.
     
     Args:
         csv_rows: List of dicts from CSV
-        detected_placeholders: Set of placeholder names from slide
+        detected_placeholders: Set of placeholder names from slide (lowercase)
         
     Returns:
         Tuple of (is_valid, list_of_issues)
@@ -219,15 +222,17 @@ def validate_csv_placeholders(csv_rows: List[Dict], detected_placeholders: Set[s
         return False, ["CSV is empty"]
     
     csv_columns = set(csv_rows[0].keys())
+    # Normalize CSV column names to lowercase for comparison
+    csv_columns_lower = {col.lower() for col in csv_columns}
     issues = []
     
-    # Check for missing columns
-    missing = detected_placeholders - csv_columns
+    # Check for missing columns (case-insensitive)
+    missing = detected_placeholders - csv_columns_lower
     if missing:
         issues.append(f"Missing CSV columns for placeholders: {missing}")
     
-    # Warn about unused columns
-    unused = csv_columns - detected_placeholders
+    # Warn about unused columns (case-insensitive)
+    unused = csv_columns_lower - detected_placeholders
     if unused:
         logging.warning(f"CSV columns not used in slide: {unused}")
     
@@ -409,17 +414,17 @@ def _replace_text_manual(
                     char_to_slides_index.append(run['startIndex'] + i)
 
             for placeholder, value in replacements.items():
-                pattern = '{{' + placeholder + '}}'
-                # Find ALL occurrences in the concatenated text
-                start = 0
-                while True:
-                    idx = full_text.find(pattern, start)
-                    if idx == -1:
-                        break
+                # Use case-insensitive regex to find placeholders
+                pattern = r'\{\{' + re.escape(placeholder) + r'\}\}'
+                matches = list(re.finditer(pattern, full_text, re.IGNORECASE))
+                
+                for match in matches:
+                    idx = match.start()
+                    match_len = match.end() - match.start()
 
                     # Map char range back to Slides startIndex / endIndex
                     slides_start = char_to_slides_index[idx]
-                    slides_end_char = idx + len(pattern) - 1
+                    slides_end_char = idx + match_len - 1
                     if slides_end_char < len(char_to_slides_index):
                         slides_end = char_to_slides_index[slides_end_char] + 1
                     else:
@@ -567,7 +572,8 @@ def generate_certificates_oauth2(
     csv_content: str,
     template_id: str,
     output_folder: str,
-    user_credentials
+    user_credentials,
+    filename_field: str = 'Name'
 ) -> Dict:
     """
     Generate certificates using user's OAuth2 credentials.
@@ -578,6 +584,7 @@ def generate_certificates_oauth2(
         template_id: Google Slides template ID
         output_folder: Drive folder name to save certificates
         user_credentials: OAuth2 credentials object from user
+        filename_field: CSV column name to use for certificate filenames (default: 'Name')
         
     Returns:
         Dict with summary: {total, success, failed, skipped, errors}
@@ -634,8 +641,17 @@ def generate_certificates_oauth2(
         
         for row_idx, row in tqdm(enumerate(csv_rows), total=len(csv_rows), desc="Generating certificates"):
             try:
-                # Get filename from first string column
-                filename = str(row.get('Name', f'certificate_{row_idx}'))
+                # Get filename from specified column (case-insensitive)
+                filename_value = None
+                for key in row.keys():
+                    if key.lower() == filename_field.lower():
+                        filename_value = str(row[key])
+                        break
+                
+                if filename_value is None:
+                    filename_value = f'certificate_{row_idx}'
+                
+                filename = filename_value
                 
                 # Duplicate template
                 temp_slide_id = duplicate_slide_template(drive_service, template_id, row_idx)
@@ -842,8 +858,11 @@ def generate_certificates(
                 # Duplicate template
                 temp_slide_id = duplicate_slide_template(drive_service, template_id, row_idx)
                 
-                # Prepare replacements (convert all values to strings)
-                replacements = {k: str(v) for k, v in row.items() if k in detected_placeholders}
+                # Prepare replacements (convert all values to strings, case-insensitive matching)
+                replacements = {}
+                for k, v in row.items():
+                    if k.lower() in detected_placeholders:
+                        replacements[k.lower()] = str(v)
                 
                 # Replace text
                 if not replace_text_in_slide(slides_service, temp_slide_id, replacements):
