@@ -6,7 +6,6 @@ Users sign in with their Google account and generate certificates to their Drive
 import os
 import json
 import logging
-import tempfile
 from functools import wraps
 from datetime import datetime
 from pathlib import Path
@@ -35,37 +34,9 @@ import config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Get temp directory for cancellation flags (works across Gunicorn workers)
-CANCELLATION_DIR = Path(tempfile.gettempdir()) / 'certfivate_cancellations'
-CANCELLATION_DIR.mkdir(exist_ok=True)
-
-def get_cancellation_file(user_email: str) -> Path:
-    """Get the cancellation flag file for a specific user."""
-    # Sanitize email for use as filename
-    safe_email = user_email.replace('@', '_at_').replace('.', '_')
-    return CANCELLATION_DIR / f"{safe_email}.cancel"
-
-def should_cancel_generation(user_email: str) -> bool:
-    """Check if cancellation was requested for this user."""
-    cancel_file = get_cancellation_file(user_email)
-    return cancel_file.exists()
-
-def request_cancellation(user_email: str) -> None:
-    """Mark that cancellation was requested for this user."""
-    cancel_file = get_cancellation_file(user_email)
-    try:
-        cancel_file.touch()
-    except Exception as e:
-        logger.error(f"Failed to create cancellation file: {e}")
-
-def clear_cancellation(user_email: str) -> None:
-    """Clear the cancellation flag for this user."""
-    cancel_file = get_cancellation_file(user_email)
-    try:
-        if cancel_file.exists():
-            cancel_file.unlink()
-    except Exception as e:
-        logger.error(f"Failed to delete cancellation file: {e}")
+# Thread-safe cancellation tracking (keyed by user email)
+# Using a simple dict since we're tracking user cancellation requests
+generation_cancellations = {}
 
 # Initialize Flask app
 app = Flask(
@@ -467,11 +438,11 @@ def api_generate():
             logger.info(f"  Output folder: {output_folder}")
             
             # Clear any previous cancellation flag for this user
-            clear_cancellation(user_email)
+            generation_cancellations.pop(user_email, None)
             
             # Create a cancellation checker function
             def check_should_cancel():
-                return should_cancel_generation(user_email)
+                return generation_cancellations.get(user_email, False)
             
             summary = generate_certificates_oauth2(
                 csv_content=csv_content,
@@ -483,7 +454,7 @@ def api_generate():
             )
             
             # Clean up the cancellation flag after generation
-            clear_cancellation(user_email)
+            generation_cancellations.pop(user_email, None)
             
             logger.info(f"Generation complete: {summary}")
             
@@ -522,11 +493,11 @@ def api_generate():
 def api_generate_cancel():
     """
     API endpoint to cancel an in-progress certificate generation.
-    Creates a flag file that all Gunicorn workers can see.
+    Sets a flag in the global dict that the generator will check periodically.
     """
     try:
         user_email = session.get('user_email', 'unknown')
-        request_cancellation(user_email)
+        generation_cancellations[user_email] = True
         logger.info(f"Cancellation requested for user {user_email}")
         return jsonify({'success': True, 'message': 'Cancellation requested. The generation process will stop soon.'}), 200
     except Exception as e:
