@@ -34,10 +34,6 @@ import config
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Thread-safe cancellation tracking (keyed by user email)
-# Using a simple dict since we're tracking user cancellation requests
-generation_cancellations = {}
-
 # Initialize Flask app
 app = Flask(
     __name__,
@@ -432,40 +428,19 @@ def api_generate():
         
         try:
             # Generate certificates with user's credentials
-            user_email = session.get('user_email', 'unknown')
-            logger.info(f"Starting certificate generation for {user_email}")
+            logger.info(f"Starting certificate generation for {session.get('user_email', 'unknown')}")
             logger.info(f"  Template ID: {template_id}")
             logger.info(f"  Output folder: {output_folder}")
-            
-            # Clear any previous cancellation flag for this user
-            generation_cancellations.pop(user_email, None)
-            
-            # Create a cancellation checker function
-            def check_should_cancel():
-                return generation_cancellations.get(user_email, False)
             
             summary = generate_certificates_oauth2(
                 csv_content=csv_content,
                 template_id=template_id,
                 output_folder=output_folder,
                 user_credentials=creds,
-                filename_field=filename_field,
-                should_cancel_func=check_should_cancel
+                filename_field=filename_field
             )
             
-            # Clean up the cancellation flag after generation
-            generation_cancellations.pop(user_email, None)
-            
             logger.info(f"Generation complete: {summary}")
-            
-            # Check if generation was cancelled
-            if summary.get('cancelled'):
-                return jsonify({
-                    'success': True,
-                    'cancelled': True,
-                    'summary': summary,
-                    'message': f"Generation was cancelled. Generated {summary['success']} certificates before stopping."
-                }), 200
             
             return jsonify({
                 'success': True,
@@ -486,23 +461,6 @@ def api_generate():
     except Exception as e:
         logger.error(f"API error: {e}", exc_info=True)
         return jsonify({'error': 'Internal server error'}), 500
-
-
-@app.route('/api/generate/cancel', methods=['POST'])
-@login_required
-def api_generate_cancel():
-    """
-    API endpoint to cancel an in-progress certificate generation.
-    Sets a flag in the global dict that the generator will check periodically.
-    """
-    try:
-        user_email = session.get('user_email', 'unknown')
-        generation_cancellations[user_email] = True
-        logger.info(f"Cancellation requested for user {user_email}")
-        return jsonify({'success': True, 'message': 'Cancellation requested. The generation process will stop soon.'}), 200
-    except Exception as e:
-        logger.error(f"Cancel API error: {e}", exc_info=True)
-        return jsonify({'error': 'Failed to cancel generation'}), 500
 
 
 @app.route('/logout')

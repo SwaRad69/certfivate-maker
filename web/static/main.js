@@ -5,7 +5,6 @@ let pickerApiLoaded = false;
 let pickerAuthToken = null;
 let csvFromDriveContent = null;  // Store CSV content when selected from Drive
 let selectedSheetsLoaded = false;  // Track if sheet tabs have been loaded
-let isGenerating = false;  // Track if generation is in progress
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', function() {
@@ -626,29 +625,15 @@ async function submitFormWithDriveCSV(csvContent, templateId) {
         }
         
         const result = await response.json();
-        
-        // Handle cancellation
-        if (result.cancelled) {
-            showSuccess('⏹️ Generation Cancelled', result.message, `
-                <p><strong>Results Before Cancellation:</strong></p>
-                <ul>
-                    <li>Generated: ${result.summary.success || 0}</li>
-                    <li>Skipped: ${result.summary.skipped || 0}</li>
-                    <li>Failed: ${result.summary.failed || 0}</li>
-                </ul>
-                <p>Partially generated certificates are saved to your Google Drive!</p>
-            `);
-        } else {
-            showSuccess('Success', result.message, `
-                <p><strong>Results:</strong></p>
-                <ul>
-                    <li>Generated: ${result.summary.success || 0}</li>
-                    <li>Failed: ${result.summary.failed || 0}</li>
-                    <li>Duration: ${result.summary.duration || 'N/A'}s</li>
-                </ul>
-                <p>Certificates saved to your Google Drive!</p>
-            `);
-        }
+        showSuccess('Success', result.message, `
+            <p><strong>Results:</strong></p>
+            <ul>
+                <li>Generated: ${result.summary.success || 0}</li>
+                <li>Failed: ${result.summary.failed || 0}</li>
+                <li>Duration: ${result.summary.duration || 'N/A'}s</li>
+            </ul>
+            <p>Certificates saved to your Google Drive!</p>
+        `);
     } catch (error) {
         hideLoading();
         showError('Error', error.message || 'Request failed');
@@ -685,29 +670,15 @@ async function submitFormWithCSV(csvFile, templateId) {
         }
         
         const result = await response.json();
-        
-        // Handle cancellation
-        if (result.cancelled) {
-            showSuccess('⏹️ Generation Cancelled', result.message, `
-                <p><strong>Results Before Cancellation:</strong></p>
-                <ul>
-                    <li>Generated: ${result.summary.success || 0}</li>
-                    <li>Skipped: ${result.summary.skipped || 0}</li>
-                    <li>Failed: ${result.summary.failed || 0}</li>
-                </ul>
-                <p>Partially generated certificates are saved to your Google Drive!</p>
-            `);
-        } else {
-            showSuccess('Success', result.message, `
-                <p><strong>Results:</strong></p>
-                <ul>
-                    <li>Generated: ${result.summary.success || 0}</li>
-                    <li>Failed: ${result.summary.failed || 0}</li>
-                    <li>Duration: ${result.summary.duration || 'N/A'}s</li>
-                </ul>
-                <p>Certificates saved to your Google Drive!</p>
-            `);
-        }
+        showSuccess('Success', result.message, `
+            <p><strong>Results:</strong></p>
+            <ul>
+                <li>Generated: ${result.summary.success || 0}</li>
+                <li>Failed: ${result.summary.failed || 0}</li>
+                <li>Duration: ${result.summary.duration || 'N/A'}s</li>
+            </ul>
+            <p>Certificates saved to your Google Drive!</p>
+        `);
     } catch (error) {
         hideLoading();
         showError('Error', error.message || 'Request failed');
@@ -745,29 +716,15 @@ async function submitFormWithSheetsId(sheetId, sheetName, templateId) {
         }
         
         const result = await response.json();
-        
-        // Handle cancellation
-        if (result.cancelled) {
-            showSuccess('⏹️ Generation Cancelled', result.message, `
-                <p><strong>Results Before Cancellation:</strong></p>
-                <ul>
-                    <li>Generated: ${result.summary.success || 0}</li>
-                    <li>Skipped: ${result.summary.skipped || 0}</li>
-                    <li>Failed: ${result.summary.failed || 0}</li>
-                </ul>
-                <p>Partially generated certificates are saved to your Google Drive!</p>
-            `);
-        } else {
-            showSuccess('Success', result.message, `
-                <p><strong>Results:</strong></p>
-                <ul>
-                    <li>Generated: ${result.summary.success || 0}</li>
-                    <li>Failed: ${result.summary.failed || 0}</li>
-                    <li>Duration: ${result.summary.duration || 'N/A'}s</li>
-                </ul>
-                <p>Certificates saved to your Google Drive!</p>
-            `);
-        }
+        showSuccess('Success', result.message, `
+            <p><strong>Results:</strong></p>
+            <ul>
+                <li>Generated: ${result.summary.success || 0}</li>
+                <li>Failed: ${result.summary.failed || 0}</li>
+                <li>Duration: ${result.summary.duration || 'N/A'}s</li>
+            </ul>
+            <p>Certificates saved to your Google Drive!</p>
+        `);
     } catch (error) {
         hideLoading();
         showError('Error', error.message || 'Request failed');
@@ -776,7 +733,6 @@ async function submitFormWithSheetsId(sheetId, sheetName, templateId) {
 
 // Show loading state
 function showLoading(message = 'Processing...') {
-    isGenerating = true;
     const container = document.getElementById('progressContainer');
     if (container) {
         container.style.display = 'block';
@@ -785,59 +741,13 @@ function showLoading(message = 'Processing...') {
             text.textContent = message;
         }
     }
-    
-    // Setup cancel button
-    const cancelButton = document.getElementById('cancelButton');
-    if (cancelButton) {
-        cancelButton.style.display = 'block';
-        cancelButton.onclick = async function(e) {
-            e.preventDefault();
-            await cancelGeneration();
-        };
-    }
 }
 
 // Hide loading state
 function hideLoading() {
-    isGenerating = false;
     const container = document.getElementById('progressContainer');
     if (container) {
         container.style.display = 'none';
-    }
-    
-    // Hide cancel button
-    const cancelButton = document.getElementById('cancelButton');
-    if (cancelButton) {
-        cancelButton.style.display = 'none';
-        cancelButton.onclick = null;
-    }
-}
-
-// Cancel generation
-async function cancelGeneration() {
-    try {
-        console.log('Requesting cancellation...');
-        const response = await fetch('/api/generate/cancel', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        });
-        
-        if (response.ok) {
-            console.log('Cancellation request sent');
-            const cancelButton = document.getElementById('cancelButton');
-            if (cancelButton) {
-                cancelButton.disabled = true;
-                cancelButton.textContent = '⏹️ Cancelling...';
-            }
-        } else {
-            console.error('Failed to send cancellation request');
-            showError('Error', 'Failed to send cancellation request. Please try again.');
-        }
-    } catch (error) {
-        console.error('Error cancelling generation:', error);
-        showError('Error', 'Failed to cancel generation: ' + error.message);
     }
 }
 

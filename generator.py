@@ -573,8 +573,7 @@ def generate_certificates_oauth2(
     template_id: str,
     output_folder: str,
     user_credentials,
-    filename_field: str = 'Name',
-    should_cancel_func=None
+    filename_field: str = 'Name'
 ) -> Dict:
     """
     Generate certificates using user's OAuth2 credentials.
@@ -586,10 +585,9 @@ def generate_certificates_oauth2(
         output_folder: Drive folder name to save certificates
         user_credentials: OAuth2 credentials object from user
         filename_field: CSV column name to use for certificate filenames (default: 'Name')
-        should_cancel_func: Optional callable that returns True if generation should be cancelled
         
     Returns:
-        Dict with summary: {total, success, failed, skipped, errors, cancelled}
+        Dict with summary: {total, success, failed, skipped, errors}
     """
     import io
     
@@ -625,7 +623,7 @@ def generate_certificates_oauth2(
         is_valid, issues = validate_csv_placeholders(csv_rows, detected_placeholders)
         if not is_valid:
             logging.error(f"CSV validation failed: {issues}")
-            return {'total': 0, 'success': 0, 'failed': len(csv_rows), 'skipped': 0, 'errors': issues, 'cancelled': False}
+            return {'total': 0, 'success': 0, 'failed': len(csv_rows), 'skipped': 0, 'errors': issues}
         
         # Find or create output folder in Drive
         folder_id = _find_or_create_drive_folder(drive_service, output_folder)
@@ -636,19 +634,12 @@ def generate_certificates_oauth2(
             'success': 0,
             'failed': 0,
             'skipped': 0,
-            'errors': [],
-            'cancelled': False
+            'errors': []
         }
         
         from tqdm import tqdm
         
         for row_idx, row in tqdm(enumerate(csv_rows), total=len(csv_rows), desc="Generating certificates"):
-            # Check for cancellation
-            if should_cancel_func and should_cancel_func():
-                logging.info(f"Cancellation requested - stopping at row {row_idx}/{len(csv_rows)}")
-                summary['cancelled'] = True
-                summary['skipped'] = len(csv_rows) - row_idx
-                break
             
             try:
                 # Get filename from specified column (case-insensitive)
@@ -694,15 +685,14 @@ def generate_certificates_oauth2(
         
         logging.info(
             f"Certificate generation complete: "
-            f"{summary['success']} success, {summary['failed']} failed, "
-            f"cancelled={summary['cancelled']}"
+            f"{summary['success']} success, {summary['failed']} failed"
         )
         
         return summary
     
     except Exception as e:
         logging.error(f"Fatal error in generate_certificates_oauth2: {e}")
-        return {'total': 0, 'success': 0, 'failed': 0, 'skipped': 0, 'errors': [str(e)], 'cancelled': False}
+        return {'total': 0, 'success': 0, 'failed': 0, 'skipped': 0, 'errors': [str(e)]}
 
 
 def _find_or_create_drive_folder(drive_service, folder_name: str) -> str:
