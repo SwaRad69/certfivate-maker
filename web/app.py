@@ -11,8 +11,9 @@ from datetime import datetime
 from pathlib import Path
 from io import BytesIO
 
-# Allow OAuth over HTTP for local development
-os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+# Allow OAuth over HTTP for local development only
+if os.environ.get('FLASK_ENV') == 'development':
+    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 from flask import Flask, render_template, redirect, url_for, request, session, jsonify, send_file
 from google.oauth2.credentials import Credentials
@@ -40,7 +41,13 @@ app = Flask(
 )
 
 # Configuration
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key-change-in-production')
+FLASK_ENV = os.environ.get('FLASK_ENV', 'development')
+if FLASK_ENV == 'production':
+    app.secret_key = os.environ.get('FLASK_SECRET_KEY')
+    if not app.secret_key:
+        raise ValueError('FLASK_SECRET_KEY environment variable is required in production')
+else:
+    app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key-change-in-production')
 
 # Google OAuth2 configuration
 GOOGLE_OAUTH_CLIENT_SECRETS = os.environ.get('GOOGLE_OAUTH_SECRETS', 'client_secrets.json')
