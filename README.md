@@ -1,3 +1,5 @@
+dead from a while --- render account got billed
+
 # Bulk Certificate Generator
 
 Generate bulk personalized certificates from a Canva-designed template in Google Slides using a CSV file. This tool automates creating individual PDFs with dynamic placeholders replaced by participant data.
