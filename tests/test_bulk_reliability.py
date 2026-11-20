@@ -64,7 +64,7 @@ class Drive:
 
         return self.request(execute)
 
-    def get_media(self, fileId):
+    def get_media(self, fileId, **kwargs):
         def execute():
             if fileId not in self.entries:
                 raise http_error(404)
@@ -75,8 +75,12 @@ class Drive:
     def list(self, q, **kwargs):
         def execute():
             batch = re.search(r"key='certificateBatch' and value='([^']+)'", q)
+            name = re.search(r"name='((?:\\.|[^'])*)'", q)
+            parent = re.search(r"'([^']+)' in parents", q)
             results = []
             for file_id, file in self.entries.items():
+                if file.get('trashed'):
+                    continue
                 if batch:
                     if file.get('appProperties', {}).get('certificateBatch') != batch[1]:
                         continue
@@ -89,6 +93,10 @@ class Drive:
                     elif file.get('mimeType') not in (PDF_MIME_TYPE, 'text/plain'):
                         continue
                 elif file.get('mimeType') != FOLDER_MIME_TYPE:
+                    continue
+                if name and file['name'] != re.sub(r"\\(.)", r"\1", name[1]):
+                    continue
+                if parent and parent[1] not in file.get('parents', ['root']):
                     continue
                 results.append(dict(file, id=file_id))
             return {'files': results}
@@ -206,6 +214,59 @@ def test_resume_after_interruption_preserves_existing_pdfs_and_does_not_duplicat
     assert web_generate(batch) == completed
     assert generator.recover_web_batch(object(), batch) == completed
     assert len(drive.pdf_creates) == 2
+
+
+def test_grouped_drive_batch_reuses_subfolders_after_interruption_and_in_a_new_batch(drive, monkeypatch):
+    records = [
+        {'Name': 'Ada', 'Team': ' Orbit '},
+        {'Name': 'Tariq', 'Team': 'Orbit'},
+        {'Name': 'Grace', 'Team': 'Nova'},
+        {'Name': 'Lina', 'Team': '   '},
+    ]
+    drive.entries['unrelated'] = {'name': 'Orbit', 'mimeType': FOLDER_MIME_TYPE, 'parents': ['other']}
+    batch = generator.reserve_web_batch(object())
+
+    def interrupt_second_row(_, slide, replacements, **kwargs):
+        drive.interrupt_upload = replacements == {'name': 'Tariq'}
+        return True
+
+    with monkeypatch.context() as patch:
+        patch.setattr(generator, 'replace_text_in_slide', interrupt_second_row)
+        with pytest.raises(KeyboardInterrupt):
+            web_generate(batch, records, group_by_column='Team')
+
+    with pytest.raises(ValueError, match='differ from the original'):
+        web_generate(batch, records)
+    assert web_generate(batch, records, group_by_column='Team')['success'] == 4
+    assert web_generate(generator.reserve_web_batch(object()), records, group_by_column='Team')['success'] == 4
+
+    folders = [(file_id, file) for file_id, file in drive.entries.items()
+               if file.get('mimeType') == FOLDER_MIME_TYPE and file_id != 'unrelated']
+    assert sorted(file['name'] for _, file in folders) == ["Director's Certificates", 'Nova', 'Orbit']
+    by_name = {file['name']: file_id for file_id, file in folders}
+    root_id = by_name["Director's Certificates"]
+    assert all(file['parents'] == [root_id] for file_id, file in folders if file_id != root_id)
+    destinations = {'Ada.pdf': 'Orbit', 'Tariq.pdf': 'Orbit', 'Grace.pdf': 'Nova',
+                    'Lina.pdf': "Director's Certificates"}
+    assert len(drive.pdf_creates) == 8
+    for file_id in drive.pdf_creates:
+        pdf = drive.entries[file_id]
+        assert pdf['parents'] == [by_name[destinations[pdf['name']]]]
+
+
+def test_cli_grouped_pdfs_keep_separate_names_and_resume(drive, tmp_path):
+    data = tmp_path / 'recipients.csv'
+    data.write_text(
+        'Name,Team\nAda,Orbit\nAda,Orbit\nAda,Nova\nAda,\nAda,A/B\nAda,A_B\n', encoding='utf-8',
+    )
+    output = tmp_path / 'output'
+    args = (str(data), 'template', str(output))
+    assert generator.generate_certificates(*args, group_by_column='Team')['success'] == 6
+    files = {path.relative_to(output).as_posix() for path in output.rglob('*.pdf')}
+    assert {'Ada.pdf', 'Orbit/Ada.pdf', 'Orbit/Ada_2.pdf', 'Nova/Ada.pdf', 'A_B/Ada.pdf'} < files
+    assert len(files) == 6
+    assert generator.generate_certificates(*args, group_by_column='Team')['skipped'] == 6
+    assert generator.generate_certificates(*args)['success'] == 6
 
 
 def test_ambiguous_upload_response_is_reconciled(drive):
@@ -459,6 +520,7 @@ def test_generation_route_reports_saved_rows_when_drive_preflight_is_unavailable
     result = response.get_json()
     assert result['batch_id'] == token
     assert result['summary']['created_pdfs'] == result['summary']['pending_rows'] == 1
+    assert result['summary']['interrupted'] is True
     assert 'Drive error' in result['summary']['errors'][0]
     status = client.get(f'/api/generation-batches/{token}').get_json()
     assert status['summary']['created_pdfs'] == status['summary']['pending_rows'] == 1

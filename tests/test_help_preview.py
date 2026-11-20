@@ -14,40 +14,6 @@ TEMPLATE_A = "template_alpha_12345678"
 TEMPLATE_B = "template_beta_123456789"
 TAG = '<img src=x onerror="window.previewExecuted = true">'
 CSV_ROW = [TAG, "00123", "Hello,\nworld", ""]
-PICKER_JS = """
-window.gapi = { load: (_, options) => options.callback() };
-window.pickerBuilds = [];
-class DocsView {
-    constructor(view) { this.view = view; }
-    setMimeTypes(types) { this.types = types; return this; }
-}
-class DocsUploadView {}
-class PickerBuilder {
-    constructor() { this.views = []; }
-    addView(view) { this.views.push(view); return this; }
-    setOAuthToken(token) { this.token = token; return this; }
-    setCallback(callback) { this.callback = callback; return this; }
-    build() {
-        return {
-            setVisible: visible => window.pickerBuilds.push({
-                views: this.views,
-                token: this.token,
-                visible,
-                pick: doc => this.callback({ action: 'picked', docs: [doc] }),
-                cancel: () => this.callback({ action: 'cancel' }),
-            })
-        };
-    }
-}
-window.google = {
-    picker: {
-        PickerBuilder, DocsView, DocsUploadView,
-        ViewId: { DOCS: 'docs', SPREADSHEETS: 'spreadsheets', PRESENTATIONS: 'presentations' },
-        Response: { ACTION: 'action', DOCUMENTS: 'docs' },
-        Action: { PICKED: 'picked', CANCEL: 'cancel' }
-    }
-};
-"""
 
 
 @pytest.fixture
@@ -102,16 +68,14 @@ class Dashboard:
         self.empty = set()
         self.previews = []
         self.templates = []
+        self.template_errors = {}
         self.generation_posts = 0
         self.generation_payloads = []
-        page.route("https://apis.google.com/js/api.js", lambda route: route.fulfill(
-            body=PICKER_JS, content_type="text/javascript"
-        ))
+        page.route("https://apis.google.com/**", lambda route: route.abort())
         page.route("http://certificate.test/**", lambda route: self.route(route, template_env))
 
     def open(self):
         self.page.goto("http://certificate.test/dashboard")
-        self.page.wait_for_function("pickerAuthToken === 'mock-token'")
 
     def route(self, route, template_env):
         request = route.request
@@ -123,8 +87,19 @@ class Dashboard:
             route.fulfill(path=WEB / path.lstrip("/"))
         elif path == "/api/user":
             route.fulfill(json={"email": "fixture@example.test"})
-        elif path == "/api/auth-token":
-            route.fulfill(json={"token": "mock-token"})
+        elif path == "/api/drive/recipient-files":
+            route.fulfill(json={"files": [
+                {"id": SHEET_A, "name": "Test workbook", "mimeType": "application/vnd.google-apps.spreadsheet"},
+                {"id": SHEET_B, "name": "Other workbook", "mimeType": "application/vnd.google-apps.spreadsheet"},
+                {"id": DRIVE_CSV, "name": "recipients.CSV", "mimeType": "text/csv"},
+            ]})
+        elif path == "/api/drive/templates":
+            route.fulfill(json={
+                "files": [{"id": TEMPLATE_A, "name": TAG}],
+                "next_page_token": "next+/=",
+            })
+        elif path == "/api/drive/templates?page_token=next%2B%2F%3D":
+            route.fulfill(json={"files": [{"id": TEMPLATE_B, "name": "Second template"}]})
         elif path.endswith("/names"):
             sheet_id = path.split("/")[-2]
             tabs = ["First Tab", "O'Brien!2026"] if sheet_id == SHEET_A else ["Other Workbook"]
@@ -152,9 +127,12 @@ class Dashboard:
         elif path == "/api/template/placeholders":
             template_id = request.post_data_json["template_id"]
             self.templates.append(template_id)
-            self.reply(route, ("template", template_id), {
-                "placeholders": ["Name", TAG] if template_id == TEMPLATE_A else ["Recipient"],
-            })
+            if template_id in self.template_errors:
+                route.fulfill(status=400, json={"error": self.template_errors[template_id]})
+            else:
+                self.reply(route, ("template", template_id), {
+                    "placeholders": ["Name", TAG] if template_id == TEMPLATE_A else ["Recipient"],
+                })
         elif path == "/api/generation-batches/new":
             route.fulfill(json={"batch_id": "test-batch"})
         elif path == "/api/generate":
@@ -176,19 +154,15 @@ class Dashboard:
         route.fulfill(json=payload, status=status)
         self.page.wait_for_load_state("networkidle")
 
-    def pick(self, file_id, name, mime_type, template=False):
-        button = "#openSlidePicker" if template else "#openGooglePicker"
-        self.page.locator(button).click()
-        self.page.evaluate(
-            "(file) => { window.pickerBuilds.at(-1).pick(file); }",
-            {"id": file_id, "name": name, "mimeType": mime_type},
-        )
+    def choose_recipients(self, file_id):
+        self.page.locator("#recipientBrowse").click()
+        self.page.locator("#recipientOptions").select_option(file_id)
 
     def pick_sheet(self, sheet_id=SHEET_A):
-        self.pick(sheet_id, "Test workbook", "application/vnd.google-apps.spreadsheet")
+        self.choose_recipients(sheet_id)
 
     def pick_csv(self):
-        self.pick(DRIVE_CSV, "recipients.CSV", "text/csv")
+        self.choose_recipients(DRIVE_CSV)
 
 
 @pytest.fixture
@@ -202,7 +176,7 @@ def dashboard(browser, template_env):
         page.close()
 
 
-def test_sheet_picker_and_preview_agree_on_workbook_and_exact_tab(dashboard):
+def test_drive_selection_and_preview_agree_on_workbook_and_exact_tab(dashboard):
     from playwright.sync_api import expect
 
     page = dashboard.page
@@ -215,8 +189,6 @@ def test_sheet_picker_and_preview_agree_on_workbook_and_exact_tab(dashboard):
         {"sheets_id": SHEET_A, "sheet_name": "O'Brien!2026", "rows": 5},
     ]
     assert page.locator("#selectedSheetId").input_value() == SHEET_A
-    assert page.evaluate("window.pickerBuilds.at(-1).views[1].types").startswith("text/csv")
-    assert page.evaluate("window.pickerBuilds.at(-1).visible && window.pickerBuilds.at(-1).token === 'mock-token'")
 
 
 def test_switching_sheet_csv_sheet_keeps_selector_and_preserves_cell_text(dashboard):
@@ -328,22 +300,19 @@ def test_prior_source_response_cannot_replace_current_preview(dashboard, key):
     assert dashboard.page.locator("#sheetSelect").input_value() == "Other Workbook"
 
 
-def test_picker_cancel_keeps_selection_and_unsupported_file_clears_it(dashboard):
+def test_closing_recipient_chooser_keeps_selection(dashboard):
     from playwright.sync_api import expect
 
     page = dashboard.page
     dashboard.pick_sheet()
     expect(page.locator("#previewBody")).to_have_text("First Tab")
-    page.locator("#openGooglePicker").click()
-    page.evaluate("window.pickerBuilds.at(-1).cancel()")
+    page.locator("#recipientBrowse").click()
+    expect(page.locator("#recipientOptions")).to_be_visible()
+    page.locator("#recipientBrowse").click()
+    expect(page.locator("#recipientOptions")).to_be_hidden()
     expect(page.locator("#previewBody")).to_have_text("First Tab")
     assert page.locator("#selectedSheetId").input_value() == SHEET_A
 
-    dashboard.pick("wrong-file-type", "rejected.pdf", "application/pdf")
-    expect(page.locator("#driveDataStatus")).to_have_text("Please select a Google Sheet or a CSV file.")
-    expect(page.locator("#previewContainer")).to_be_hidden()
-    expect(page.locator("#sheetTabsGroup")).to_be_hidden()
-    assert page.locator("#selectedSheetId").input_value() == ""
 
 
 def test_prior_tab_response_cannot_replace_newer_tab_or_show_stale_error(dashboard):
@@ -361,22 +330,38 @@ def test_prior_tab_response_cannot_replace_newer_tab_or_show_stale_error(dashboa
     expect(page.locator("#driveDataStatus")).to_be_empty()
 
 
-def test_pasted_and_picked_template_ids_show_safe_literal_filename_options(dashboard):
+def test_pasted_slide_link_and_drive_selection_show_safe_literal_filename_options(dashboard):
     from playwright.sync_api import expect
 
     page = dashboard.page
-    page.locator("#templateId").fill(TEMPLATE_A)
+    page.locator("#templateId").fill(f"https://docs.google.com/presentation/d/{TEMPLATE_A}/edit#slide=id.1")
     expect(page.locator("#filenameField")).to_have_value("Name")
     assert dashboard.templates == [TEMPLATE_A]
     assert page.locator("#filenameField option").all_text_contents() == ["Default filename field", "Name", TAG]
     assert page.locator("#filenameField img").count() == 0
     page.locator("#filenameField").select_option(TAG)
 
-    dashboard.pick(TEMPLATE_A, TAG, "application/vnd.google-apps.presentation", template=True)
-    expect(page.locator("#selectedTemplateName")).to_have_text("? " + TAG)
+    page.locator("#templateBrowse").click()
+    page.locator("#templateOptions").select_option(TEMPLATE_A)
+    expect(page.locator("#selectedTemplateName")).to_have_text(TAG)
     expect(page.locator("#filenameField")).to_have_value(TAG)
     assert page.locator("#selectedTemplateName img").count() == 0
     assert page.locator("#templateId").input_value() == TEMPLATE_A
+
+
+def test_template_chooser_loads_more_and_reports_access_error(dashboard):
+    from playwright.sync_api import expect
+
+    page = dashboard.page
+    error = "Could not open this presentation. Check its sharing permissions."
+    dashboard.template_errors[TEMPLATE_B] = error
+    page.locator("#templateId").fill(TEMPLATE_A)
+    expect(page.locator("#filenameField")).to_have_value("Name")
+    page.locator("#templateBrowse").click()
+    page.locator("#templateMore").click()
+    page.locator("#templateOptions").select_option(TEMPLATE_B)
+    expect(page.locator("#templateStatus")).to_have_text(error)
+    expect(page.locator("#filenameField")).to_be_hidden()
 
 
 def test_template_lookup_from_old_selection_cannot_replace_current_options(dashboard):

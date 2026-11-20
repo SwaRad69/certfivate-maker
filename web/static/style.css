@@ -141,6 +141,10 @@ body {
     gap: 8px;
 }
 
+.form-group[hidden] {
+    display: none;
+}
+
 .label {
     font-weight: 600;
     color: var(--dark-color);

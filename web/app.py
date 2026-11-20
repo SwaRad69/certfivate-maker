@@ -19,16 +19,18 @@ if os.environ.get('FLASK_ENV') in ('development', None) or os.environ.get('FLASK
 
 from flask import Flask, g, render_template, redirect, url_for, request, session, jsonify, send_file
 from itsdangerous import BadSignature, URLSafeSerializer
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request as GoogleRequest
+from googleapiclient.errors import HttpError
 import google.auth
 
 # Add parent directory to path for imports
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from generator import generate_certificates_oauth2, recover_web_batch, reserve_web_batch
+from generator import generate_certificates_oauth2, read_web_template, recover_web_batch, reserve_web_batch
 from web.file_converter import (
     get_supported_formats,
     parse_rows,
@@ -109,7 +111,7 @@ def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'credentials' not in session:
-            return redirect(url_for('login'))
+            return _login_response()
         
         # Refresh credentials if needed
         creds_data = session.get('credentials')
@@ -121,14 +123,24 @@ def login_required(f):
                 if creds.expired and creds.refresh_token:
                     creds.refresh(GoogleRequest())
                     _save_session_credentials(creds)
-            except ValueError:
-                # Credentials format invalid, redirect to login
+            except RefreshError as error:
+                if error.retryable:
+                    return jsonify({'error': 'Google sign-in is temporarily unavailable. Try again.'}), 503
                 session.clear()
-                return redirect(url_for('login'))
+                return _login_response()
+            except ValueError:
+                session.clear()
+                return _login_response()
         
         return f(*args, **kwargs)
     
     return decorated_function
+
+
+def _login_response():
+    if request.path.startswith('/api/'):
+        return jsonify({'error': 'Sign in to the certificate maker again and retry.'}), 401
+    return redirect(url_for('login'))
 
 
 @app.route('/')
@@ -221,6 +233,20 @@ def api_supported_formats():
     })
 
 
+@app.route('/api/upload/columns', methods=['POST'])
+@login_required
+def api_upload_columns():
+    """Return the column names used by generation for an uploaded file."""
+    uploaded_file = request.files.get('csv_file')
+    if not uploaded_file or not uploaded_file.filename:
+        return jsonify({'error': 'Choose a data file to upload.'}), 400
+    try:
+        headers, _ = read_input_records(uploaded_file.read(), uploaded_file.filename)
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
+    return jsonify({'headers': headers})
+
+
 @app.route('/api/drive/file/<file_id>/csv', methods=['GET'])
 @login_required
 def api_drive_file_to_csv(file_id):
@@ -243,7 +269,8 @@ def api_drive_file_to_csv(file_id):
         # Get file metadata
         file_info = drive_service.files().get(
             fileId=file_id,
-            fields='id,name,mimeType,trashed'
+            fields='id,name,mimeType,trashed',
+            supportsAllDrives=True,
         ).execute()
         
         if file_info.get('trashed'):
@@ -255,7 +282,7 @@ def api_drive_file_to_csv(file_id):
         logger.info(f"File info: {filename}, MIME type: {mime_type}")
         
         # Download file content
-        request = drive_service.files().get_media(fileId=file_id)
+        request = drive_service.files().get_media(fileId=file_id, supportsAllDrives=True)
         file_bytes = request.execute()
         
         # Use the same headers and records that generation reads.
@@ -287,54 +314,95 @@ def api_drive_file_to_csv(file_id):
             return jsonify({'error': f'Failed to download file: {error_str}'}), 500
 
 
+def _extract_template_id(value):
+    if isinstance(value, str):
+        value = value.strip()
+        match = re.fullmatch(
+            r'https://docs\.google\.com/presentation/(?:u/[0-9]+/)?d/'
+            r'([A-Za-z0-9_-]+)(?:[/?#]\S*)?',
+            value,
+        )
+        template_id = match[1] if match else value
+        if re.fullmatch(r'[A-Za-z0-9_-]{20,}', template_id):
+            return template_id
+    raise ValueError('Select a Google Slides template or paste its link or file ID.')
+
+
+@app.route('/api/drive/templates')
+@login_required
+def api_drive_templates():
+    """List one page of Google Slides presentations for the template chooser."""
+    return _list_drive_files(
+        f"mimeType = '{config.SLIDES_MIME_TYPE}'",
+        'Could not list presentations in Google Drive. Try again or paste a Slides link.',
+    )
+
+
+@app.route('/api/drive/recipient-files')
+@login_required
+def api_drive_recipient_files():
+    """List one page of Google Sheets and CSV files for the recipient chooser."""
+    return _list_drive_files(
+        "mimeType = 'application/vnd.google-apps.spreadsheet' or mimeType = 'text/csv' "
+        "or mimeType = 'application/csv' or mimeType = 'application/vnd.ms-excel'",
+        'Could not list recipient files in Google Drive. Try again or upload a file.',
+        csv_only_for_excel=True,
+    )
+
+
+def _list_drive_files(file_filter, failure_message, *, csv_only_for_excel=False):
+    from googleapiclient.discovery import build
+
+    try:
+        drive = build('drive', config.DRIVE_API_VERSION, credentials=_session_credentials())
+        result = drive.files().list(
+            q=f'trashed = false and ({file_filter})',
+            spaces='drive',
+            corpora='user',
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            orderBy='modifiedTime desc',
+            fields='nextPageToken,files(id,name,mimeType)',
+            pageSize=100,
+            pageToken=request.args.get('page_token'),
+        ).execute()
+        files = result.get('files', [])
+        if csv_only_for_excel:
+            files = [
+                file for file in files
+                if file['mimeType'] != 'application/vnd.ms-excel' or file['name'].lower().endswith('.csv')
+            ]
+        return jsonify({'files': files, 'next_page_token': result.get('nextPageToken')})
+    except HttpError as error:
+        logger.warning('Unable to list Drive files: %s', error)
+        if error.resp.status == 401:
+            return _login_response()
+        return jsonify({'error': failure_message}), 502
+
+
 @app.route('/api/template/placeholders', methods=['POST'])
 @login_required
 def get_template_placeholders():
-    """
-    Detect placeholders in a template and return them.
-    Allows user to choose which placeholder to use for certificate names.
-    """
+    """Read the template and return available certificate filename fields."""
+    from googleapiclient.discovery import build
+
     try:
-        template_id = request.json.get('template_id', '').strip()
-        
-        if not template_id or len(template_id) < 20:
-            return jsonify({'error': 'Invalid template ID'}), 400
-        
-        # Get credentials
-        creds_data = session.get('credentials')
-        if not creds_data:
-            return jsonify({'error': 'Not authenticated'}), 401
-        
+        data = request.get_json(silent=True)
+        template_id = _extract_template_id(data.get('template_id') if isinstance(data, dict) else None)
         creds = _session_credentials()
-        
-        # Refresh if needed
-        if creds.expired and creds.refresh_token:
-            creds.refresh(GoogleRequest())
-            _save_session_credentials(creds)
-        
-        # Build Slides service
-        from googleapiclient.discovery import build
-        slides_service = build('slides', 'v1', credentials=creds)
-        
-        # Import and use the detector
-        from generator import detect_placeholders_in_slide
-        
-        try:
-            placeholders = detect_placeholders_in_slide(slides_service, template_id)
-            
-            return jsonify({
-                'success': True,
-                'placeholders': sorted(list(placeholders)),
-                'message': 'Select which field to use for certificate filenames'
-            })
-        
-        except Exception as e:
-            logger.error(f"Failed to detect placeholders: {e}")
-            return jsonify({'error': f'Failed to detect template placeholders: {str(e)}'}), 400
-    
-    except Exception as e:
-        logger.error(f"Error in get_template_placeholders: {e}")
-        return jsonify({'error': str(e)}), 500
+        drive = build('drive', config.DRIVE_API_VERSION, credentials=creds)
+        slides = build('slides', config.SLIDES_API_VERSION, credentials=creds)
+        _, placeholders = read_web_template(drive, slides, template_id)
+        return jsonify({
+            'success': True,
+            'placeholders': sorted(placeholders),
+            'message': 'Select which field to use for certificate filenames',
+        })
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
+    except Exception:
+        logger.exception('Unable to read Google Slides template')
+        return jsonify({'error': 'Could not read the Google Slides template. Try again.'}), 502
 
 
 def generation_response(summary, input_rows=None, output_folder=None):
@@ -366,7 +434,10 @@ def generation_response(summary, input_rows=None, output_folder=None):
         message = errors[0] if errors else 'The generation request is invalid.'
     elif pending:
         status, code = 'pending', 202
-        message = f'{created} PDFs saved. {pending} rows are still pending.'
+        if summary.get('interrupted'):
+            message = f'{created} PDFs saved. Resume Batch to continue with the {pending} remaining rows.'
+        else:
+            message = f'{created} PDFs saved. {pending} rows are still pending.'
     elif not created:
         status, code = 'failed', 500
         message = 'Generation failed. No PDFs were created.'
@@ -453,7 +524,10 @@ def api_generate():
             _save_session_credentials(creds)
         
         # Get form data
-        template_id = request.form.get('template_id', '').strip()
+        try:
+            template_id = _extract_template_id(request.form.get('template_id'))
+        except ValueError as error:
+            return invalid_generation_response(str(error))
         output_folder = request.form.get('output_folder', '').strip() or 'Certificate Generator'
         filename_field = request.form.get('filename_field') or 'Name'
         batch_token = request.form.get('batch_id', '').strip()
@@ -464,10 +538,6 @@ def api_generate():
             except BadSignature:
                 return invalid_generation_response('Invalid generation batch ID.')
         
-        # Validate template ID
-        if not re.fullmatch(r'[A-Za-z0-9_-]{20,}', template_id):
-            return invalid_generation_response('Select or paste a valid Google Slides template ID.')
-
         uploads = [file for file in request.files.getlist('csv_file') if file.filename]
         has_sheets = bool(
             request.form.get('sheets_id')
@@ -522,6 +592,7 @@ def api_generate():
                 output_folder=output_folder,
                 user_credentials=creds,
                 filename_field=filename_field,
+                group_by_column=request.form.get('group_by_column', ''),
                 records=records,
                 input_rows=input_rows,
                 batch_id=batch_id,
@@ -699,7 +770,8 @@ def api_drive_sheet_names(sheet_id):
         try:
             file_info = drive_service.files().get(
                 fileId=sheet_id,
-                fields='id,name,mimeType,trashed'
+                fields='id,name,mimeType,trashed',
+                supportsAllDrives=True,
             ).execute()
             
             logger.info(f"File info: {file_info}")

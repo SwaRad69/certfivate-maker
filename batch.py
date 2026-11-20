@@ -64,9 +64,13 @@ class DriveBatch:
         return self.manifest
 
     def create(
-        self, *, identity, input_rows, rows, snapshot_id, template_metadata, placeholders, folder_id, folder_name
+        self, *, identity, input_rows, rows, snapshot_id, template_metadata, placeholders,
+        folder_id, folder_name, group_folders=None,
     ):
-        file_ids = reserve_drive_ids(self.files, rows * 2 + (0 if folder_id else 1))
+        group_folders = group_folders or {}
+        new_folders = sum(existing_id is None for existing_id in group_folders.values())
+        file_ids = reserve_drive_ids(self.files, rows * 2 + (not folder_id) + new_folders)
+        folder_ids = iter(file_ids[rows * 2:])
         manifest = {
             'schema': 1,
             'identity': identity,
@@ -74,12 +78,17 @@ class DriveBatch:
             'template': template_metadata,
             'snapshot_id': snapshot_id,
             'placeholders': sorted(placeholders),
-            'folder_id': folder_id or file_ids[-1],
+            'folder_id': folder_id or next(folder_ids),
             'output_folder': folder_name,
             'create_folder': not folder_id,
             'pdf_ids': file_ids[:rows],
             'failure_ids': file_ids[rows:rows * 2],
         }
+        if group_folders:
+            manifest['group_folders'] = {
+                name: {'id': existing_id or next(folder_ids), 'create': existing_id is None}
+                for name, existing_id in group_folders.items()
+            }
         media = MediaIoBaseUpload(
             BytesIO(json.dumps(manifest).encode('utf-8')), mimetype='application/json'
         )
@@ -105,20 +114,30 @@ class DriveBatch:
 
     def ensure_output_folder(self):
         folder_id = self.manifest['folder_id']
-        if self.manifest['create_folder'] and self._get_file(folder_id, 'id,trashed') is None:
+        if self.manifest['create_folder']:
+            self._ensure_folder(folder_id, self.manifest['output_folder'])
+        return folder_id
+
+    def ensure_group_folder(self, name):
+        folder = self.manifest['group_folders'][name]
+        if folder['create']:
+            self._ensure_folder(folder['id'], name, parent_id=self.manifest['folder_id'])
+        return folder['id']
+
+    def _ensure_folder(self, folder_id, name, *, parent_id=None):
+        if self._get_file(folder_id, 'id,trashed') is None:
+            body = {
+                'id': folder_id,
+                'name': name,
+                'mimeType': 'application/vnd.google-apps.folder',
+            }
+            if parent_id:
+                body['parents'] = [parent_id]
             try:
-                self.files.create(
-                    body={
-                        'id': folder_id,
-                        'name': self.manifest['output_folder'],
-                        'mimeType': 'application/vnd.google-apps.folder',
-                    },
-                    fields='id',
-                ).execute()
+                self.files.create(body=body, fields='id').execute()
             except HttpError as error:
                 if not _drive_conflict(error):
                     raise
-        return folder_id
 
     def properties(self, row_index):
         return {'certificateBatch': self.batch_id, 'certificateRow': str(row_index)}

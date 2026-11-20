@@ -41,13 +41,18 @@ function mockElement(id) {
             return this.tabName;
         },
         querySelector: selector => selector === 'h3' ? heading : null,
-        replaceChildren() {
-            this.children = [];
+        replaceChildren(...children) {
+            this.children = children;
             if (this.id === 'recoveryBatchSelect') this.value = '';
         },
         appendChild(child) {
             this.children.push(child);
             if (this.id === 'recoveryBatchSelect' && this.children.length === 1) this.value = child.value;
+        },
+        insertRow() {
+            const row = mockElement('row');
+            this.appendChild(row);
+            return row;
         },
         dispatch(type, detail = {}) {
             const event = { preventDefault() {}, ...detail };
@@ -57,7 +62,7 @@ function mockElement(id) {
     };
 }
 
-function dashboard({ generate, storage = new Map() } = {}) {
+function dashboard({ generate, request, storage = new Map() } = {}) {
     const elements = Object.fromEntries([...template.matchAll(/\bid="([^"]+)"/g)]
         .map(match => [match[1], mockElement(match[1])]));
     const element = id => elements[id] || null;
@@ -98,6 +103,8 @@ function dashboard({ generate, storage = new Map() } = {}) {
                 return { ok: true, json: async () => ({ batch_id: `batch-${++currentBatch}` }) };
             }
             if (url === '/api/generate' && generate) return generate(options.body);
+            const response = request?.(url, options);
+            if (response) return response;
             return { ok: true, json: async () => ({ status: 'completed' }) };
         },
         FormData,
@@ -134,6 +141,10 @@ function dashboard({ generate, storage = new Map() } = {}) {
             elements.selectedSheetId.value = 'csv:drive-file';
             context.mockCsvContent = value;
             vm.runInContext('csvFromDriveContent = mockCsvContent;', context);
+        },
+        driveHeaders(headers) {
+            context.mockHeaders = headers;
+            vm.runInContext('displayPreview(mockHeaders, [], 2);', context);
         },
         postCalls() {
             return calls.filter(call => call.url === '/api/generate');
@@ -182,6 +193,41 @@ test('Drive CSV posts once as one CSV upload without stale local file or sheet t
     assert.equal(await body.get('csv_file').text(), 'Name\nAda');
     assert.equal(body.has('sheets_id'), false);
     assert.equal(body.has('sheet_name'), false);
+});
+
+test('grouping loads upload columns and resets when switching to a different source', async () => {
+    assert.match(template, /<label for="groupByColumn"[^>]*>Group certificates by column \(optional\)<\/label>/);
+    const view = dashboard({
+        request(url, options) {
+            if (url === '/api/upload/columns') {
+                assert.equal(options.body.get('csv_file').name, 'input.xlsx');
+                return { ok: true, json: async () => ({ headers: ['Name', 'Team'] }) };
+            }
+        },
+    });
+    view.sheet();
+    view.driveHeaders(['Name', 'Department']);
+    const group = view.element('groupByColumn');
+    assert.deepEqual(group.children.map(option => option.value), ['', 'Name', 'Department']);
+    assert.equal(group.children[0].textContent, 'No grouping');
+    group.value = 'Department';
+    await view.tab('csv');
+    assert.equal(group.value, '');
+    assert.equal(group.disabled, true);
+    assert.equal(group.children[0].textContent, 'Upload a file or select a sheet to see columns');
+    view.local('input.xlsx');
+    await view.element('csvFile').dispatch('change');
+    assert.deepEqual(group.children.map(option => option.value), ['', 'Name', 'Team']);
+    assert.equal(group.disabled, false);
+    group.value = 'Team';
+    await view.submit('startTestBtn');
+    assert.equal(view.postCalls()[0].options.body.get('group_by_column'), 'Team');
+    assert.equal(view.postCalls()[0].options.body.get('test_mode'), 'true');
+    await view.tab('sheets');
+    assert.deepEqual(group.children.map(option => option.value), ['', 'Name', 'Department']);
+    assert.equal(group.value, '');
+    await view.submit();
+    assert.equal(view.postCalls()[1].options.body.has('group_by_column'), false);
 });
 
 test('Google Sheets posts once with the exact selected tab and no local file', async () => {
@@ -295,6 +341,68 @@ test('source switches submit the current selection and preserve inactive selecti
     assert.notEqual(local.get('batch_id'), sheets.get('batch_id'));
 });
 
+test('one Generate click continues across work windows with the same batch and settings', async () => {
+    const remaining = [3, 1, 0];
+    const view = dashboard({
+        generate: async () => {
+            const pending = remaining.shift();
+            const summary = { pending_rows: pending, created_pdfs: 4 - pending };
+            return {
+                status: pending ? 202 : 200,
+                json: async () => ({ status: pending ? 'pending' : 'completed', summary }),
+            };
+        },
+    });
+    view.local();
+    await view.tab('csv');
+    await view.submit();
+
+    assert.deepEqual(view.calls.map(call => call.url), [
+        '/api/generation-batches/new', '/api/generate', '/api/generate', '/api/generate',
+    ]);
+    const bodies = view.postCalls().map(call => call.options.body);
+    assert.ok(bodies.every(body => body === bodies[0]));
+    assert.equal(bodies[0].get('batch_id'), 'batch-1');
+    assert.equal(bodies[0].has('retry_failed'), false);
+    assert.match(view.element('progressText').textContent, /3 saved, 1 remaining/);
+    assert.equal(view.results.at(-1)[0].status, 'completed');
+    assert.equal(view.storage.has(savedBatchKey), false);
+});
+
+test('a Drive interruption stays recoverable with either server response format', async () => {
+    for (const interruption of [
+        { interrupted: true },
+        { errors: ['Generation paused after a Drive error. Check batch status or resume.'] },
+    ]) {
+        const view = dashboard({
+            generate: async () => ({
+                status: 202,
+                json: async () => ({ status: 'pending', summary: { pending_rows: 3, ...interruption } }),
+            }),
+        });
+        view.local();
+        await view.tab('csv');
+        await view.submit();
+        assert.equal(view.postCalls().length, 1);
+        assert.equal(view.storage.has(savedBatchKey), true);
+    }
+});
+
+test('unchanged pending counts stop automatic continuation and preserve the batch', async () => {
+    const view = dashboard({
+        generate: async () => ({
+            status: 202,
+            json: async () => ({ status: 'pending', summary: { pending_rows: 3, created_pdfs: 0 } }),
+        }),
+    });
+    view.local();
+    await view.tab('csv');
+    await view.submit();
+    assert.equal(view.postCalls().length, 3);
+    assert.match(view.results.at(-1)[0].message, /no new rows were processed/);
+    assert.equal(view.storage.has(savedBatchKey), true);
+});
+
 test('interruption keeps a token, resumes the original submission, and checks status after reload', async () => {
     let attempts = 0;
     const view = dashboard({
@@ -305,12 +413,14 @@ test('interruption keeps a token, resumes the original submission, and checks st
     });
     view.local();
     await view.tab('csv');
+    view.element('groupByColumn').value = 'Team';
     await view.submit();
     assert.match(view.element('errorMessage').textContent, /Connection lost/);
     assert.equal(view.element('batchRecovery').hidden, false);
     const saved = JSON.parse(view.storage.get(savedBatchKey));
     assert.equal(saved.id, 'batch-1');
     assert.equal(saved.testCount, null);
+    assert.equal(saved.groupByColumn, 'Team');
     assert.equal(typeof saved.startedAt, 'number');
     view.element('outputFolder').value = 'Changed after POST';
     await view.element('resumeBatchBtn').dispatch('click');
@@ -320,13 +430,21 @@ test('interruption keeps a token, resumes the original submission, and checks st
     assert.equal(retry.get('retry_failed'), 'true');
     assert.equal(retry.get('csv_file').name, 'input.csv');
     assert.equal(retry.get('output_folder'), 'Awards Archive');
+    assert.equal(retry.get('group_by_column'), 'Team');
     assert.equal(view.calls.filter(call => call.url.endsWith('/new')).length, 1);
 
-    const reloaded = dashboard({ storage: view.storage });
+    const reloaded = dashboard({
+        storage: view.storage,
+        generate: async () => ({ json: async () => ({ status: 'pending' }) }),
+    });
     assert.equal(reloaded.element('batchRecovery').hidden, false);
+    reloaded.local();
+    await reloaded.tab('csv');
+    await reloaded.element('resumeBatchBtn').dispatch('click');
+    assert.equal(reloaded.postCalls()[0].options.body.get('group_by_column'), 'Team');
     await reloaded.element('checkBatchBtn').dispatch('click');
-    assert.deepEqual(reloaded.calls.map(call => call.url), ['/api/generation-batches/batch-1']);
-    assert.equal(reloaded.results[0][0].status, 'completed');
+    assert.deepEqual(reloaded.calls.map(call => call.url), ['/api/generate', '/api/generation-batches/batch-1']);
+    assert.equal(reloaded.results.at(-1)[0].status, 'completed');
     assert.equal(reloaded.element('batchRecovery').hidden, true);
     assert.equal(reloaded.storage.has(savedBatchKey), false);
 });

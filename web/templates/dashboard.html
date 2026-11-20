@@ -6,27 +6,34 @@
 <div class="dashboard">
     <div class="dashboard-card">
         <h2>Generate Bulk Certificates</h2>
-        <p class="subtitle">Upload your CSV and template ID to generate certificates directly to your Google Drive</p>
+        <p class="subtitle">Choose your recipient data and a Google Slides template to generate certificates in Drive.</p>
 
         <form id="generateForm" class="form" enctype="multipart/form-data" novalidate>
             <!-- Tab Navigation -->
             <div class="tabs">
-                <button type="button" class="tab-btn active" data-tab="sheets">📊 Google Sheets</button>
+                <button type="button" class="tab-btn active" data-tab="sheets">📊 Google Drive</button>
                 <button type="button" class="tab-btn" data-tab="csv">📄 CSV Upload</button>
             </div>
 
             <!-- Google Sheets Tab -->
             <div id="sheets-tab" class="tab-content active">
                 <div class="form-group">
-                    <label class="label">📊 Select from Your Google Drive</label>
+                    <label class="label">Recipient data</label>
                     <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                        <button type="button" id="openGooglePicker" class="btn btn-primary">
-                            📁 Open Google Drive Picker
+                        <button type="button" id="recipientBrowse" class="btn btn-primary" aria-expanded="false" aria-controls="recipientList">
+                            📁 Choose a Google Sheet or CSV
                         </button>
-                        <span id="selectedSheetName" style="padding: 10px; color: #666;">Click to browse...</span>
+                        <span id="selectedSheetName" style="padding: 10px; color: #666;"></span>
+                    </div>
+                    <div id="recipientList" class="form-group" hidden>
+                        <label for="recipientOptions" class="label">Google Sheets and CSV files</label>
+                        <select id="recipientOptions" class="input">
+                            <option value="">Choose a recipient file</option>
+                        </select>
+                        <button type="button" id="recipientMore" class="btn btn-secondary" hidden>Load more files</button>
+                        <small id="recipientBrowseStatus" role="status"></small>
                     </div>
                     <input type="hidden" id="selectedSheetId" name="sheets_id" value="">
-                    <small>Opens Google's native file picker to select a spreadsheet or CSV from your Drive</small>
                 </div>
 
                 <div class="form-group" id="sheetTabsGroup" style="display: none;">
@@ -61,32 +68,41 @@
                             type="file" 
                             id="csvFile" 
                             name="csv_file" 
-                            accept=".csv,.txt,.tsv,.xlsx,.xls,.ods,.json,.jsonl"
+                            accept=".csv,.txt,.tsv,.xlsx,.xlsm,.xls,.ods,.json,.jsonl"
                             class="file-input"
                         >
                         <span class="file-input-text">Choose data file</span>
                     </div>
-                    <small>Supports: CSV, TSV, Excel (.xlsx, .xls), ODS, JSON, JSON Lines, and plain text files. Files will be automatically converted to CSV format.</small>
+                    <small>Supports: CSV, TSV, Excel (.xlsx, .xlsm, .xls), ODS, JSON, JSON Lines, and plain text files. Files will be automatically converted to CSV format.</small>
                 </div>
             </div>
 
             <div class="form-group">
-                <label class="label">🎪 Template (Google Slides)</label>
+                <label class="label" for="templateId">🎪 Template (Google Slides)</label>
                 <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                    <button type="button" id="openSlidePicker" class="btn btn-primary">
+                    <button type="button" id="templateBrowse" class="btn btn-primary" aria-expanded="false" aria-controls="templateList">
                         📽️ Select Template from Drive
                     </button>
-                    <span id="selectedTemplateName" style="padding: 10px; color: #666;">Click to browse...</span>
+                    <span id="selectedTemplateName" style="padding: 10px; color: #666;"></span>
+                </div>
+                <div id="templateList" class="form-group" hidden>
+                    <label for="templateOptions" class="label">Google Slides presentations</label>
+                    <select id="templateOptions" class="input">
+                        <option value="">Choose a presentation</option>
+                    </select>
+                    <button type="button" id="templateMore" class="btn btn-secondary" hidden>Load more presentations</button>
+                    <small id="templateBrowseStatus" role="status"></small>
                 </div>
                 <input 
                     type="text" 
                     id="templateId" 
                     name="template_id" 
-                    placeholder="Or paste Google Slides Template ID here"
+                    placeholder="Paste a Google Slides link or file ID"
+                    aria-describedby="templateStatus"
                     required
                     class="input"
                 >
-                <small>Either select from Drive (click button above) or paste the Template ID from: docs.google.com/presentation/d/<strong>TEMPLATE_ID</strong></small>
+                <small id="templateStatus" role="status"></small>
             </div>
 
             <div class="form-group" id="filenamePlaceholderSelector" hidden>
@@ -108,6 +124,15 @@
                     class="input"
                 >
                 <small>Name of folder in your Drive where certificates will be saved</small>
+            </div>
+
+            <div class="form-group">
+                <label for="groupByColumn" class="label">Group certificates by column (optional)</label>
+                <select id="groupByColumn" name="group_by_column" class="input" aria-describedby="groupByColumnHelp" disabled>
+                    <option value="">Upload a file or select a sheet to see columns</option>
+                </select>
+                <small id="groupByColumnHelp">For example, choose Team to put everyone with the same team name in one subfolder. Rows with a blank value stay in the main output folder.</small>
+                <small id="uploadColumnStatus" role="status" hidden></small>
             </div>
 
             <div style="display: flex; gap: 10px; margin-bottom: 20px;">
@@ -147,7 +172,7 @@
                 <div class="progress-bar">
                     <div id="progressFill" class="progress-fill"></div>
                 </div>
-                <p id="progressText">Initializing...</p>
+                <p id="progressText" role="status">Initializing...</p>
             </div>
         </div>
 

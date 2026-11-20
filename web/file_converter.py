@@ -49,6 +49,7 @@ def convert_to_csv(file_bytes, filename):
         'txt': _convert_text,
         'tsv': _convert_tsv,  # Tab-separated values
         'xlsx': _convert_xlsx,
+        'xlsm': _convert_xlsx,  # Excel Macro-Enabled Spreadsheet
         'xls': _convert_xls,
         'ods': _convert_ods,  # OpenDocument Spreadsheet
         'json': _convert_json,
@@ -440,6 +441,7 @@ SUPPORTED_FORMATS = {
     'txt': 'Text (Comma/Tab-Separated)',
     'tsv': 'TSV (Tab-Separated Values)',
     'xlsx': 'Excel Spreadsheet (Modern)',
+    'xlsm': 'Excel Macro-Enabled Spreadsheet (.xlsm)',
     'xls': 'Excel Spreadsheet (Legacy)',
     'ods': 'OpenDocument Spreadsheet',
     'json': 'JSON (Array of Objects)',

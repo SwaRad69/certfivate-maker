@@ -88,13 +88,23 @@ class CheckpointManager:
     def is_complete(self, row_index: int) -> bool:
         key = str(row_index)
         filename = self.output_files.get(key)
+        path = self._output_path(filename) if filename else None
         return (
             row_index in self.completed_rows
-            and filename is not None
-            and Path(filename).name == filename
+            and path is not None
             and filename.casefold() not in self._other_outputs(key)
-            and (self.checkpoint_path.parent / filename).is_file()
+            and not path.is_symlink()
+            and path.is_file()
         )
+
+    def _output_path(self, filename):
+        relative = Path(filename)
+        if relative.anchor or len(relative.parts) not in (1, 2) or '..' in relative.parts:
+            return None
+        path = self.checkpoint_path.parent / relative
+        if path.parent.resolve() == path.parent.absolute():
+            return path
+        return None
 
     def _other_outputs(self, row_key):
         reserved = {
@@ -104,18 +114,24 @@ class CheckpointManager:
         reserved.update(name.casefold() for key, name in self.output_files.items() if key != row_key)
         return reserved
 
-    def plan_output(self, row_index: int, filename: str) -> str:
+    def plan_output(self, row_index: int, filename: str, group_name: str = '') -> str:
         key = str(row_index)
         reserved = self._other_outputs(key)
         previous = self.output_files.get(key)
-        if (previous and Path(previous).name == previous and previous.casefold() not in reserved
-                and not (self.checkpoint_path.parent / previous).exists()):
+        previous_path = self._output_path(previous) if previous else None
+        if (previous_path and Path(previous).parent == Path(group_name)
+                and previous.casefold() not in reserved and not os.path.lexists(previous_path)):
             return previous
         suffix = 1
-        candidate = f'{filename}.pdf'
-        while candidate.casefold() in reserved or (self.checkpoint_path.parent / candidate).exists():
+        candidate = (Path(group_name) / f'{filename}.pdf').as_posix()
+        while True:
+            path = self._output_path(candidate)
+            if path is None:
+                raise ValueError(f'Invalid certificate output path: {candidate}')
+            if candidate.casefold() not in reserved and not os.path.lexists(path):
+                break
             suffix += 1
-            candidate = f'{filename}_{suffix}.pdf'
+            candidate = (Path(group_name) / f'{filename}_{suffix}.pdf').as_posix()
         self.completed_rows.discard(row_index)
         self.output_files[key] = candidate
         self.save()

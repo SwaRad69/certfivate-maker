@@ -14,6 +14,7 @@ from pathlib import Path
 from google.oauth2.service_account import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
 
 import config
@@ -441,8 +442,39 @@ WEB_BATCH_WORK_SECONDS = 18
 
 def _template_drive_metadata(drive_service, template_id):
     return drive_service.files().get(
-        fileId=template_id, fields='name,parents,version', supportsAllDrives=True
+        fileId=template_id,
+        fields='name,parents,version,mimeType,trashed,capabilities(canCopy)',
+        supportsAllDrives=True,
     ).execute()
+
+
+def read_web_template(drive_service, slides_service, template_id):
+    """Validate that the user can read and copy the Slides template."""
+    try:
+        metadata = _template_drive_metadata(drive_service, template_id)
+        if metadata.get('trashed'):
+            raise ValueError('This template is in Google Drive Trash. Restore it or choose another presentation.')
+        if metadata.get('mimeType', config.SLIDES_MIME_TYPE) != config.SLIDES_MIME_TYPE:
+            raise ValueError('Choose a native Google Slides presentation. Convert PowerPoint files in Google Slides first.')
+        if metadata.get('capabilities', {}).get('canCopy') is False:
+            raise ValueError('Google Drive blocks copying this presentation. Ask the owner to allow copying.')
+        return metadata, detect_placeholders_in_slide(slides_service, template_id)
+    except HttpError as error:
+        logging.warning('Unable to read Google Slides template: %s', error)
+        reasons = {detail.get('reason') for detail in (error.error_details or ()) if isinstance(detail, dict)}
+        if reasons & {'accessNotConfigured', 'SERVICE_DISABLED'}:
+            message = 'Enable the Google Drive and Google Slides APIs in the app’s Google Cloud project.'
+        elif error.resp.status == 401:
+            message = 'Sign in to the certificate maker again and retry.'
+        elif reasons & {'insufficientPermissions', 'ACCESS_TOKEN_SCOPE_INSUFFICIENT'}:
+            message = 'Sign in again and grant the certificate maker access to Google Drive and Slides.'
+        elif error.resp.status == 429 or reasons & {'rateLimitExceeded', 'userRateLimitExceeded', 'RATE_LIMIT_EXCEEDED'}:
+            message = 'Google limited template requests. Wait briefly and try again.'
+        elif error.resp.status in (403, 404):
+            message = 'Could not open this presentation. Check the link and share the file with the Google account shown above.'
+        else:
+            message = 'Could not read the Google Slides template. Try again.'
+        raise ValueError(message) from error
 
 
 def _template_version(files, template_id):
@@ -479,6 +511,7 @@ def _web_batch_result(batch, *, sweep=False, cleanup_pending=False, interruption
     if cleanup_pending:
         summary['cleanup_pending'] = True
     if interruption:
+        summary['interrupted'] = True
         summary['errors'].append(interruption)
     return summary
 
@@ -505,6 +538,14 @@ def _snapshot_web_template(drive_service, template_id, metadata, batch_id):
     return snapshot_id
 
 
+def _group_values(records, column):
+    if not column:
+        return [''] * len(records)
+    if not records or column not in records[0]:
+        raise ValueError(f'Grouping column "{column}" was not found in the selected data source.')
+    return [str(row[column]).strip() if row.get(column) is not None else '' for row in records]
+
+
 def generate_certificates_oauth2(
     csv_content: str | None,
     template_id: str,
@@ -512,6 +553,7 @@ def generate_certificates_oauth2(
     user_credentials,
     filename_field: str = 'Name',
     *,
+    group_by_column: str = '',
     records: List[Dict] | None = None,
     input_rows: int | None = None,
     batch_id=None,
@@ -525,7 +567,12 @@ def generate_certificates_oauth2(
         raise ValueError("The selected data source has no certificate records.")
 
     input_rows = len(records) if input_rows is None else input_rows
-    identity = content_digest([template_id, output_folder, filename_field, input_rows, records])
+    group_values = _group_values(records, group_by_column)
+    group_names = dict.fromkeys(value for value in group_values if value)
+    identity_parts = [template_id, output_folder, filename_field, input_rows, records]
+    if group_by_column:
+        identity_parts.append(group_by_column)
+    identity = content_digest(identity_parts)
     deadline = time.monotonic() + work_seconds if batch_id else float('inf')
     slides_service = build('slides', config.SLIDES_API_VERSION, credentials=user_credentials)
     drive_service = _drive_service(user_credentials)
@@ -533,10 +580,10 @@ def generate_certificates_oauth2(
     batch = DriveBatch(files, batch_id) if batch_id else None
     manifest = batch.load() if batch else None
     template_metadata = None
+    group_folders = {}
 
     if manifest is None:
-        template_metadata = _template_drive_metadata(drive_service, template_id)
-        detected_placeholders = detect_placeholders_in_slide(slides_service, template_id)
+        template_metadata, detected_placeholders = read_web_template(drive_service, slides_service, template_id)
         is_valid, issues = validate_csv_placeholders(records, detected_placeholders)
         if not is_valid:
             return {
@@ -544,8 +591,12 @@ def generate_certificates_oauth2(
                 'success': 0, 'failed': 0, 'skipped': 0, 'created_pdfs': 0,
                 'validation_failed': True, 'errors': issues,
             }
+        # In grouped batches, resolve the main folder at the root so a group
+        # with the same name can never be selected as the main folder.
+        parent_id = 'root' if group_by_column else None
+        folder_id = _find_drive_folder(drive_service, output_folder, parent_id=parent_id)
+        existing_groups = _find_group_folders(files, folder_id, group_names) if folder_id and group_names else {}
         if batch:
-            folder_id = _find_drive_folder(drive_service, output_folder)
             snapshot_id = _snapshot_web_template(drive_service, template_id, template_metadata, batch_id)
             manifest = batch.create(
                 identity=identity, input_rows=input_rows, rows=len(records),
@@ -553,11 +604,13 @@ def generate_certificates_oauth2(
                 template_metadata=template_metadata, placeholders=detected_placeholders,
                 folder_id=folder_id,
                 folder_name=output_folder,
+                group_folders={name: existing_groups.get(name) for name in group_names},
             )
             if manifest['snapshot_id'] != snapshot_id:
                 delete_temp_slide(files, snapshot_id)
         else:
-            folder_id = _find_or_create_drive_folder(drive_service, output_folder)
+            folder_id = folder_id or _create_drive_folder(files, output_folder)
+            group_folders = existing_groups
 
     if batch and manifest['identity'] != identity:
         raise ValueError("The data, template, or output settings differ from the original batch.")
@@ -613,8 +666,14 @@ def generate_certificates_oauth2(
                     slides_service, temp_slide_id, replacements, raise_on_failure=True
                 ):
                     raise RuntimeError("Text replacement failed.")
+                group = group_values[row_idx]
+                if group and group not in group_folders:
+                    group_folders[group] = (
+                        batch.ensure_group_folder(group) if batch
+                        else _create_drive_folder(files, group, parent_id=folder_id)
+                    )
                 if not export_slide_to_pdf_drive(
-                    drive_service, temp_slide_id, filename, folder_id,
+                    drive_service, temp_slide_id, filename, group_folders.get(group, folder_id),
                     file_id=batch.manifest['pdf_ids'][row_idx] if batch else None,
                     app_properties=batch.properties(row_idx) if batch else None,
                     raise_on_failure=True,
@@ -654,10 +713,13 @@ def generate_certificates_oauth2(
 
 
 
-def _find_drive_folder(drive_service, folder_name):
+def _find_drive_folder(drive_service, folder_name, *, parent_id=None):
     name = drive_query_value(folder_name)
+    query = f"name='{name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    if parent_id:
+        query += f" and '{drive_query_value(parent_id)}' in parents"
     result = drive_service.files().list(
-        q=f"name='{name}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
+        q=query,
         spaces='drive',
         fields='files(id)',
         pageSize=10,
@@ -666,14 +728,31 @@ def _find_drive_folder(drive_service, folder_name):
     return folders[0]['id'] if folders else None
 
 
-def _find_or_create_drive_folder(drive_service, folder_name: str) -> str:
-    folder_id = _find_drive_folder(drive_service, folder_name)
-    if folder_id:
-        return folder_id
-    return drive_service.files().create(
-        body={'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'},
-        fields='id',
-    ).execute()['id']
+def _find_group_folders(files, parent_id, group_names):
+    query = (
+        f"'{drive_query_value(parent_id)}' in parents and "
+        "mimeType='application/vnd.google-apps.folder' and trashed=false"
+    )
+    folders = {}
+    page_token = None
+    while True:
+        result = files.list(
+            q=query, spaces='drive', fields='nextPageToken,files(id,name)',
+            pageSize=1000, pageToken=page_token,
+        ).execute()
+        for folder in result.get('files', []):
+            if folder['name'] in group_names:
+                folders.setdefault(folder['name'], folder['id'])
+        page_token = result.get('nextPageToken')
+        if not page_token or len(folders) == len(group_names):
+            return folders
+
+
+def _create_drive_folder(files, folder_name, *, parent_id=None):
+    body = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
+    if parent_id:
+        body['parents'] = [parent_id]
+    return files.create(body=body, fields='id').execute()['id']
 
 
 def export_slide_to_pdf_drive(
@@ -729,6 +808,8 @@ def generate_certificates(
     credentials_path: str = config.DEFAULT_CREDENTIALS_PATH,
     cleanup: bool = False,
     clear_checkpoint: bool = False,
+    *,
+    group_by_column: str = '',
 ) -> Dict:
     """
     Main orchestration function to generate all certificates (CLI version).
@@ -739,6 +820,7 @@ def generate_certificates(
         output_folder: Path to output folder
         credentials_path: Path to service account credentials
         cleanup: If True, delete temp slides after success
+        group_by_column: Optional input column for output subfolder names
         
     Returns:
         Dict with summary: {total, success, failed, skipped, errors}
@@ -748,18 +830,52 @@ def generate_certificates(
     try:
         output_folder = ensure_output_folder(output_folder)
         with output_checkpoint_lock(output_folder):
-            return _generate_local_certificates(csv_path, template_id, output_folder, credentials_path, cleanup, clear_checkpoint)
+            return _generate_local_certificates(
+                csv_path, template_id, output_folder, credentials_path, cleanup, clear_checkpoint, group_by_column
+            )
 
     except Exception as e:
         logging.error(f"Fatal error in generate_certificates: {e}")
         return {'total': 0, 'success': 0, 'failed': 0, 'skipped': 0, 'errors': [str(e)]}
 
 
-def _generate_local_certificates(csv_path, template_id, output_folder, credentials_path, cleanup, clear_checkpoint):
-    slides_service, drive_service = authenticate_google(credentials_path)
+def _local_group_names(output_folder, group_values):
+    names = {}
+    used = set()
+    group_values = dict.fromkeys(value for value in group_values if value)
+    if not group_values:
+        return names
+    existing = {path.name.casefold(): path for path in output_folder.iterdir()}
+    for value in group_values:
+        safe = safe_filename(value, max_bytes=120)
+        candidate = safe
+        if safe != value:
+            candidate = f'{safe}_{content_digest(value)[:10]}'
+        suffix = 1
+        base = candidate
+        while True:
+            key = candidate.casefold()
+            path = existing.get(key)
+            if key not in used and (
+                path is None or (path.name == candidate and path.is_dir() and path.resolve() == path)
+            ):
+                break
+            suffix += 1
+            candidate = f'{base}_{suffix}'
+        names[value] = candidate
+        used.add(key)
+    return names
 
+
+def _generate_local_certificates(
+    csv_path, template_id, output_folder, credentials_path, cleanup, clear_checkpoint, group_by_column
+):
     # Load and validate CSV
     csv_rows = read_csv(csv_path)
+    group_values = _group_values(csv_rows, group_by_column)
+    output_path = Path(output_folder)
+    group_names = _local_group_names(output_path, group_values)
+    slides_service, drive_service = authenticate_google(credentials_path)
 
     # Detect placeholders from template
     detected_placeholders = detect_placeholders_in_slide(slides_service, template_id)
@@ -771,9 +887,12 @@ def _generate_local_certificates(csv_path, template_id, output_folder, credentia
         return {'total': 0, 'success': 0, 'failed': len(csv_rows), 'skipped': 0, 'errors': issues}
 
     template_metadata = _template_drive_metadata(drive_service, template_id)
-    checkpoint_identity = content_digest([
+    identity_parts = [
         str(Path(csv_path).resolve()), csv_rows, template_id, template_metadata.get('version'),
-    ])
+    ]
+    if group_by_column:
+        identity_parts.append(group_by_column)
+    checkpoint_identity = content_digest(identity_parts)
     checkpoint = CheckpointManager(output_folder, checkpoint_identity)
     if clear_checkpoint:
         checkpoint.clear()
@@ -799,7 +918,10 @@ def _generate_local_certificates(csv_path, template_id, output_folder, credentia
         temp_slide_id = None
         try:
             filename = safe_filename(str(row.get('Name', f'certificate_{row_idx}')), max_bytes=200)
-            planned_output = checkpoint.plan_output(row_idx, filename)
+            group_name = group_names.get(group_values[row_idx], '')
+            destination = output_path / group_name
+            destination.mkdir(exist_ok=True)
+            planned_output = checkpoint.plan_output(row_idx, filename, group_name)
             temp_slide_id = duplicate_slide_template(
                 drive_service, template_id, row_idx, template_metadata=template_metadata
             )
@@ -816,7 +938,7 @@ def _generate_local_certificates(csv_path, template_id, output_folder, credentia
 
             # Export to PDF
             if not export_slide_to_pdf(
-                drive_service, temp_slide_id, output_folder, Path(planned_output).stem
+                drive_service, temp_slide_id, destination, Path(planned_output).stem
             ):
                 raise Exception("PDF export failed")
 

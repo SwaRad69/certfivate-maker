@@ -50,6 +50,14 @@ def test_read_first_worksheet_or_csv_with_original_values(filename):
     assert parse_csv(records_to_csv(headers, records)) == (headers, records)
 
 
+def test_read_xlsm_macro_enabled_workbook():
+    path = FIXTURES / 'input_records.xlsx'
+    headers, records = read_input_records(path.read_bytes(), 'sample_data.xlsm')
+    expected = fixture_records('input_records.xlsx')
+    assert headers == list(expected[0])
+    assert records == expected
+
+
 @pytest.mark.parametrize('filename', ['excel_display.xlsx', 'excel_display.xls'])
 def test_excel_common_display_formats(filename):
     path = FIXTURES / filename

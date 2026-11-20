@@ -46,6 +46,12 @@ For help and setup instructions, see README.md
         default=config.DEFAULT_OUTPUT_FOLDER,
         help=f'Output folder for PDF certificates (default: {config.DEFAULT_OUTPUT_FOLDER})'
     )
+
+    parser.add_argument(
+        '--group-by-column',
+        default='',
+        help='Column to use for subfolder names, such as Team. Blank values stay in the output folder.'
+    )
     
     parser.add_argument(
         '--creds',
@@ -108,6 +114,7 @@ For help and setup instructions, see README.md
             credentials_path=str(creds_path),
             cleanup=args.cleanup,
             clear_checkpoint=args.clear_checkpoint,
+            group_by_column=args.group_by_column,
         )
         
         # Print summary

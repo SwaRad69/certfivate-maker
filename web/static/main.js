@@ -1,14 +1,13 @@
 /* Certificate Generator Web App - JavaScript */
 
-// Google Picker API key and credentials
-let pickerApiLoaded = false;
-let pickerAuthToken = null;
 let csvFromDriveContent = null;  // Store CSV content when selected from Drive
 let selectedSheetReady = false;
 let driveSelectionVersion = 0;
 let sheetPreviewVersion = 0;
 let templateSelectionVersion = 0;
 let templateLookupTimer;
+let driveColumns = [];
+let uploadColumns = [];
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', function() {
@@ -16,14 +15,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
     setupEventListeners();
     loadUserInfo();
-    initializeGooglePicker();
 });
 
 async function loadUserInfo() {
     try {
         const response = await fetch('/api/user');
         if (!response.ok) {
-            window.location.href = '/login';
+            if (response.status === 401) window.location.href = '/login';
             return;
         }
         const data = await response.json();
@@ -31,26 +29,6 @@ async function loadUserInfo() {
     } catch (error) {
         console.error('Error loading user info:', error);
     }
-}
-
-function initializeGooglePicker() {
-    if (typeof gapi === 'undefined') return;
-
-    gapi.load('picker', { 'callback': onPickerApiLoad });
-    
-    // Get OAuth token for Picker
-    fetch('/api/auth-token')
-        .then(res => res.json())
-        .then(data => {
-            pickerAuthToken = data.token;
-            console.log('Auth token loaded for Picker');
-        })
-        .catch(err => console.error('Error getting auth token:', err));
-}
-
-function onPickerApiLoad() {
-    pickerApiLoaded = true;
-    console.log('Google Picker API loaded');
 }
 
 function setupEventListeners() {
@@ -62,27 +40,23 @@ function setupEventListeners() {
         });
     });
 
-    // Open Google Picker button
-    const openPickerButton = document.getElementById('openGooglePicker');
-    if (openPickerButton) {
-        openPickerButton.addEventListener('click', openGooglePicker);
-    }
-    
-    // Open Slide Picker button
-    const openSlidePickerButton = document.getElementById('openSlidePicker');
-    if (openSlidePickerButton) {
-        openSlidePickerButton.addEventListener('click', openSlidePicker);
-    }
+    setupDriveChooser('recipient', '/api/drive/recipient-files', 'Google Sheets or CSV files', 'Upload a file instead.', selectRecipientFile);
+    setupDriveChooser('template', '/api/drive/templates', 'Google Slides presentations', 'Paste a Slides link instead.', file => {
+        document.getElementById('templateId').value = file.id;
+        return updateTemplateSelection(file.id, file.name);
+    });
 
     // File input
     const fileInput = document.getElementById('csvFile');
     if (fileInput) {
         fileInput.addEventListener('change', function() {
-            const filename = this.files[0]?.name || 'Choose data file';
+            const file = this.files[0];
+            const filename = file?.name || 'Choose data file';
             const textSpan = document.querySelector('.file-input-text');
             if (textSpan) {
                 textSpan.textContent = filename;
             }
+            return loadUploadColumns(fileInput, file);
         });
     }
 
@@ -94,65 +68,90 @@ function setupEventListeners() {
 
     const templateInput = document.getElementById('templateId');
     templateInput.addEventListener('input', function() {
-        updateTemplateSelection(templateInput.value.trim());
+        updateTemplateSelection(templateInput.value);
     });
 
     setupGenerationSubmission();
 }
 
-function openGooglePicker() {
-    if (!pickerApiLoaded || !pickerAuthToken) {
-        setDriveDataStatus('Google Picker is unavailable. Please try again.');
-        return;
+function setupDriveChooser(prefix, endpoint, fileType, fallback, onSelect) {
+    const browse = document.getElementById(prefix + 'Browse');
+    const panel = document.getElementById(prefix + 'List');
+    const select = document.getElementById(prefix + 'Options');
+    const more = document.getElementById(prefix + 'More');
+    const status = document.getElementById(prefix + 'BrowseStatus');
+    const files = new Map();
+    let nextPage = '';
+
+    function toggle(open) {
+        panel.hidden = !open;
+        browse.setAttribute('aria-expanded', String(open));
     }
 
-    const csvView = new google.picker.DocsView(google.picker.ViewId.DOCS)
-        .setMimeTypes('text/csv,application/csv,application/vnd.ms-excel');
-    const picker = new google.picker.PickerBuilder()
-        .addView(google.picker.ViewId.SPREADSHEETS)
-        .addView(csvView)
-        .addView(new google.picker.DocsUploadView())
-        .setOAuthToken(pickerAuthToken)
-        .setCallback(handlePickerResponse)
-        .build();
-    
-    picker.setVisible(true);
-}
-
-function openSlidePicker() {
-    if (!pickerApiLoaded || !pickerAuthToken) {
-        showError('Error', 'Google Picker is still loading. Please try again.');
-        return;
-    }
-    
-    // Create Picker for Google Presentations (Slides) only
-    const picker = new google.picker.PickerBuilder()
-        .addView(google.picker.ViewId.PRESENTATIONS)  // Google Slides/Presentations
-        .setOAuthToken(pickerAuthToken)
-        .setCallback(handleSlidePickerResponse)
-        .build();
-    
-    picker.setVisible(true);
-}
-
-function handleSlidePickerResponse(data) {
-    if (data[google.picker.Response.ACTION] !== google.picker.Action.PICKED) return;
-
-    const doc = data[google.picker.Response.DOCUMENTS][0];
-    if (doc.mimeType !== 'application/vnd.google-apps.presentation') {
-        showError('Error', 'Please select a Google Slides presentation.');
-        return;
+    async function loadFiles(pageToken = '') {
+        if (!pageToken) {
+            files.clear();
+            select.options.length = 1;
+            more.hidden = true;
+        }
+        browse.disabled = more.disabled = select.disabled = true;
+        status.textContent = 'Loading files from Google Drive…';
+        const loadError = 'Could not load files from Google Drive. ' + fallback;
+        try {
+            const query = pageToken ? '?page_token=' + encodeURIComponent(pageToken) : '';
+            const response = await fetch(endpoint + query, { cache: 'no-store' });
+            const data = await response.json();
+            if (!response.ok) {
+                status.textContent = data.error || loadError;
+                return;
+            }
+            for (const file of data.files) {
+                if (files.has(file.id)) continue;
+                files.set(file.id, file);
+                const option = document.createElement('option');
+                option.value = file.id;
+                option.textContent = file.name;
+                select.appendChild(option);
+            }
+            nextPage = data.next_page_token || '';
+            more.hidden = !nextPage;
+            status.textContent = files.size || nextPage ? '' : 'No ' + fileType + ' found. ' + fallback;
+        } catch (error) {
+            console.error('Could not list Drive files:', error);
+            status.textContent = loadError;
+        } finally {
+            browse.disabled = more.disabled = select.disabled = false;
+        }
     }
 
-    document.getElementById('templateId').value = doc.id;
-    updateTemplateSelection(doc.id, doc.name);
+    browse.addEventListener('click', () => {
+        toggle(panel.hidden);
+        if (!panel.hidden) return loadFiles();
+    });
+    more.addEventListener('click', () => loadFiles(nextPage));
+    select.addEventListener('change', () => {
+        const file = files.get(select.value);
+        if (!file) return;
+        toggle(false);
+        browse.focus();
+        return onSelect(file);
+    });
 }
 
-function updateTemplateSelection(templateId, templateName = '') {
+function extractTemplateId(input) {
+    const value = input.trim();
+    const link = value.match(/^https:\/\/docs\.google\.com\/presentation\/(?:u\/[0-9]+\/)?d\/([A-Za-z0-9_-]+)(?:[/?#]\S*)?$/);
+    const id = link ? link[1] : value;
+    return /^[A-Za-z0-9_-]{20,}$/.test(id) ? id : '';
+}
+
+function updateTemplateSelection(input, templateName = '') {
+    const templateId = extractTemplateId(input);
     const version = ++templateSelectionVersion;
     const container = document.getElementById('filenamePlaceholderSelector');
     const filenameField = document.getElementById('filenameField');
     const selectedTemplateName = document.getElementById('selectedTemplateName');
+    const status = document.getElementById('templateStatus');
 
     if (container.dataset.templateId !== templateId) {
         container.hidden = true;
@@ -160,28 +159,34 @@ function updateTemplateSelection(templateId, templateName = '') {
         filenameField.value = '';
         container.dataset.templateId = templateId;
     }
-    selectedTemplateName.textContent = templateName ? ('? ' + templateName) : 'Click to browse...';
+    selectedTemplateName.textContent = templateName;
     clearTimeout(templateLookupTimer);
-    if (/^[a-zA-Z0-9_-]{20,}$/.test(templateId)) {
-        templateLookupTimer = setTimeout(() => detectTemplatePlaceholders(templateId, version), 250);
-    }
+    status.textContent = templateId ? 'Checking template…' : '';
+    if (!templateId) return;
+    if (templateName) return detectTemplatePlaceholders(templateId, version);
+    templateLookupTimer = setTimeout(() => detectTemplatePlaceholders(templateId, version), 250);
 }
 
 async function detectTemplatePlaceholders(templateId, version) {
+    const status = document.getElementById('templateStatus');
+    const container = document.getElementById('filenamePlaceholderSelector');
+    const select = document.getElementById('filenameField');
     try {
         const response = await fetch('/api/template/placeholders', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ template_id: templateId })
         });
-        if (!response.ok || version !== templateSelectionVersion) return;
-
         const data = await response.json();
         if (version !== templateSelectionVersion ||
-            document.getElementById('templateId').value.trim() !== templateId) return;
+            extractTemplateId(document.getElementById('templateId').value) !== templateId) return;
 
-        const container = document.getElementById('filenamePlaceholderSelector');
-        const select = document.getElementById('filenameField');
+        if (!response.ok) {
+            container.hidden = true;
+            select.options.length = 1;
+            status.textContent = data.error || 'Could not read the Google Slides template. Try again.';
+            return;
+        }
         const previousValue = container.hidden ? data.placeholders?.[0] : select.value;
         select.options.length = 1;
         for (const placeholder of data.placeholders || []) {
@@ -192,42 +197,33 @@ async function detectTemplatePlaceholders(templateId, version) {
         }
         select.value = previousValue ?? '';
         container.hidden = select.options.length === 1;
+        status.textContent = data.placeholders?.length ? '' : 'This presentation has no certificate placeholders.';
     } catch (error) {
         console.error('Error detecting placeholders:', error);
+        if (version === templateSelectionVersion) {
+            container.hidden = true;
+            select.options.length = 1;
+            status.textContent = 'Could not read the Google Slides template. Try again.';
+        }
     }
 }
 
-function handlePickerResponse(data) {
-    if (data[google.picker.Response.ACTION] !== google.picker.Action.PICKED) return;
-
-    const doc = data[google.picker.Response.DOCUMENTS][0];
-    const isCsv = doc.mimeType === 'text/csv' || doc.mimeType === 'application/csv' ||
-        /[.]csv$/i.test(doc.name);
-    const isSheet = doc.mimeType === 'application/vnd.google-apps.spreadsheet';
+function selectRecipientFile(file) {
+    const isSheet = file.mimeType === 'application/vnd.google-apps.spreadsheet';
     const version = ++driveSelectionVersion;
     ++sheetPreviewVersion;
     selectedSheetReady = false;
     csvFromDriveContent = null;
     const selectedId = document.getElementById('selectedSheetId');
     const selectedName = document.getElementById('selectedSheetName');
-    selectedId.value = '';
-    selectedName.textContent = 'Click to browse...';
+    selectedId.value = isSheet ? file.id : ('csv:' + file.id);
+    selectedName.textContent = file.name + (isSheet ? '' : ' (CSV)');
     document.getElementById('sheetSelect').replaceChildren();
     document.getElementById('sheetTabsGroup').style.display = 'none';
     clearDataPreview();
     switchTab('sheets');
 
-    if (!isCsv && !isSheet) {
-        setDriveDataStatus('Please select a Google Sheet or a CSV file.');
-        return;
-    }
-    selectedId.value = isCsv ? ('csv:' + doc.id) : doc.id;
-    selectedName.textContent = doc.name + (isCsv ? ' (CSV)' : '');
-
-    if (isCsv) {
-        return downloadAndUseCsvFile(doc.id, version);
-    }
-    return loadSheetTabs(doc.id, version);
+    return isSheet ? loadSheetTabs(file.id, version) : downloadAndUseCsvFile(file.id, version);
 }
 
 function setDriveDataStatus(message) {
@@ -235,6 +231,10 @@ function setDriveDataStatus(message) {
 }
 
 function clearDataPreview() {
+    driveColumns = [];
+    if (document.getElementById('sheets-tab').classList.contains('active')) {
+        updateGroupingColumns(driveColumns);
+    }
     document.getElementById('previewContainer').style.display = 'none';
     document.getElementById('previewHead').replaceChildren();
     document.getElementById('previewBody').replaceChildren();
@@ -312,15 +312,24 @@ async function previewSheetData(sheetId, sheetName) {
 }
 
 function switchTab(tabName) {
+    const wasActive = document.getElementById(tabName + '-tab').classList.contains('active');
     document.querySelectorAll('.tab-content').forEach(tab => {
         tab.classList.toggle('active', tab.id === tabName + '-tab');
     });
     document.querySelectorAll('.tab-btn').forEach(button => {
         button.classList.toggle('active', button.dataset.tab === tabName);
     });
+    if (!wasActive) {
+        updateGroupingColumns(tabName === 'csv' ? uploadColumns : driveColumns);
+    }
+    document.getElementById('uploadColumnStatus').hidden = tabName !== 'csv';
 }
 
 function displayPreview(headers, rows, totalRows) {
+    driveColumns = totalRows > 0 ? headers : [];
+    if (document.getElementById('sheets-tab').classList.contains('active')) {
+        updateGroupingColumns(driveColumns);
+    }
     const thead = document.getElementById('previewHead');
     const tbody = document.getElementById('previewBody');
     const headerRow = thead.insertRow();
@@ -339,6 +348,47 @@ function displayPreview(headers, rows, totalRows) {
 
     document.getElementById('rowCount').textContent = 'Showing ' + rows.length + ' of ' + totalRows + ' data rows';
     document.getElementById('previewContainer').style.display = 'block';
+}
+
+function updateGroupingColumns(headers) {
+    const select = document.getElementById('groupByColumn');
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = headers.length ? 'No grouping' : 'Upload a file or select a sheet to see columns';
+    select.replaceChildren(defaultOption);
+    select.value = '';
+    for (const header of headers) {
+        const option = document.createElement('option');
+        option.value = header;
+        option.textContent = header;
+        select.appendChild(option);
+    }
+    select.disabled = headers.length === 0;
+}
+
+async function loadUploadColumns(fileInput, file) {
+    const isActive = () => document.getElementById('csv-tab').classList.contains('active');
+    const status = document.getElementById('uploadColumnStatus');
+    uploadColumns = [];
+    if (isActive()) updateGroupingColumns(uploadColumns);
+    status.textContent = file?.size ? 'Reading column names…' : '';
+    if (!file?.size) return;
+
+    const data = new FormData();
+    data.append('csv_file', file);
+    try {
+        const response = await fetch('/api/upload/columns', { method: 'POST', body: data });
+        const result = await response.json();
+        if (fileInput.files[0] !== file) return;
+        if (!response.ok) throw new Error(result.error);
+        uploadColumns = result.headers;
+        if (isActive()) updateGroupingColumns(uploadColumns);
+        status.textContent = '';
+    } catch (error) {
+        if (fileInput.files[0] === file) {
+            status.textContent = error.message || 'Could not read column names.';
+        }
+    }
 }
 
 const batchStoragePrefix = 'certificate-generator.batch.';
@@ -378,11 +428,8 @@ function setupGenerationSubmission() {
 }
 
 function buildGenerationPayload(testCount) {
-    const templateId = document.getElementById('templateId').value.trim();
-    if (!templateId) throw new Error('Enter or select a Google Slides template.');
-    if (!/^[A-Za-z0-9_-]{20,}$/.test(templateId)) {
-        throw new Error('Enter a valid template ID from the Google Slides URL.');
-    }
+    const templateId = extractTemplateId(document.getElementById('templateId').value);
+    if (!templateId) throw new Error('Select a Google Slides template or paste its link or file ID.');
 
     const data = new FormData();
     if (document.getElementById('csv-tab').classList.contains('active')) {
@@ -421,6 +468,8 @@ function buildGenerationPayload(testCount) {
     data.append('output_folder', outputFolder);
     const filenameField = document.getElementById('filenameField')?.value;
     if (filenameField) data.append('filename_field', filenameField);
+    const groupByColumn = document.getElementById('groupByColumn').value;
+    if (groupByColumn) data.append('group_by_column', groupByColumn);
 
     if (testCount !== null) {
         const input = document.getElementById('testCount');
@@ -451,8 +500,8 @@ function updateBatchRecovery(selectedId) {
 function rememberBatch(batch) {
     pendingBatches.set(batch.id, batch);
     try {
-        const { id, testCount, startedAt } = batch;
-        localStorage.setItem(batchStoragePrefix + id, JSON.stringify({ id, testCount, startedAt }));
+        const { id, testCount, startedAt, groupByColumn } = batch;
+        localStorage.setItem(batchStoragePrefix + id, JSON.stringify({ id, testCount, startedAt, groupByColumn }));
     } catch {
         // Keep the batch available for recovery on the current page.
     }
@@ -499,6 +548,10 @@ function submitGeneration({ testMode = false, resume = false } = {}) {
         if (resume && !batch) return;
         const testCount = batch ? batch.testCount : testMode ? Number(document.getElementById('testCount').value) : null;
         const data = batch?.data || buildGenerationPayload(testCount);
+        if (batch?.groupByColumn !== undefined) {
+            if (batch.groupByColumn) data.set('group_by_column', batch.groupByColumn);
+            else data.delete('group_by_column');
+        }
         let batchId = batch?.id;
         if (!batchId) {
             const response = await fetch('/api/generation-batches/new', { cache: 'no-store' });
@@ -510,11 +563,48 @@ function submitGeneration({ testMode = false, resume = false } = {}) {
         }
 
         data.set('batch_id', batchId);
-        if (resume) data.set('retry_failed', 'true');
-        const savedBatch = { id: batchId, testCount, data, startedAt: batch?.startedAt ?? Date.now() };
+        const savedBatch = {
+            id: batchId, testCount, data,
+            startedAt: batch?.startedAt ?? Date.now(),
+            groupByColumn: data.get('group_by_column') || '',
+        };
         rememberBatch(savedBatch);
-        const response = await fetch('/api/generate', { method: 'POST', body: data });
-        const result = await response.json();
+        let body = data;
+        if (resume) {
+            body = new FormData();
+            data.forEach((value, key) => body.append(key, value));
+            body.set('retry_failed', 'true');
+        }
+
+        let result;
+        let previousPending = Infinity;
+        let stalledRequests = 0;
+        while (true) {
+            let response;
+            try {
+                response = await fetch('/api/generate', { method: 'POST', body });
+                result = await response.json();
+            } catch (error) {
+                throw new Error(`Generation paused. Use Check Batch Status or Resume Batch to recover it. ${error.message}`);
+            }
+
+            const summary = result.summary;
+            const pending = summary?.pending_rows;
+            if (response.status !== 202 || result.status !== 'pending' || !(pending > 0)) break;
+            // Older running servers report a Drive interruption only in the error details.
+            if (summary.interrupted || summary.errors?.some(error => error.startsWith('Generation paused after a Drive error.'))) break;
+
+            stalledRequests = pending < previousPending ? 0 : stalledRequests + 1;
+            if (stalledRequests >= 2) {
+                result.message = 'Generation paused because no new rows were processed. Use Resume Batch to try again.';
+                break;
+            }
+
+            showLoading(`Generating certificates… ${summary.created_pdfs} saved, ${pending} remaining.`);
+            previousPending = pending;
+            body = data;
+        }
+
         const outputFolder = data.get('output_folder') + (testCount === null ? '' : ' (TEST)');
         renderGenerationResult(result, outputFolder);
 
