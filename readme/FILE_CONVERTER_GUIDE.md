@@ -27,14 +27,19 @@ The Certificate Generator now includes a built-in universal file converter that 
 ## Format Details
 
 ### CSV & TSV
-- Standard spreadsheet formats
-- TSV is automatically detected by file extension
-- Supports various character encodings
+- Quoted cells retain commas and line breaks.
+- Cells retain their text, including leading zeros, Unicode, and empty values.
+- First N counts complete data records after the header, including records that span several lines.
 
 ### Excel Files (XLS/XLSX)
-- Reads the first sheet by default
-- Empty cells are preserved
-- Works with files from modern Excel and legacy versions
+- Uploads read the first worksheet.
+- Text and empty cells are preserved. The reader renders common fixed-decimal, percentage, currency, date, time, and zero-padded formats such as `00000`.
+- A numeric cell with General formatting contains no leading zeros. Store identifiers as text when the exact spelling matters.
+- Excel formulas use their cached results when the workbook provides them. Locale-specific and complex custom formats can fall back to the underlying value. Use text when exact display formatting matters.
+
+### Google Sheets
+
+Preview and generation use the displayed values from the selected tab, including columns after Z.
 
 ### OpenDocument (ODS)
 - Fully compatible with LibreOffice and OpenOffice
@@ -64,12 +69,13 @@ One JSON object per line:
 ### Python Packages
 
 Standard requirements (included in `requirements.txt`):
-- `pandas` - For Excel (XLSX/XLS) conversion
+- `openpyxl` for modern XLSX workbooks
+- `xlrd` for legacy XLS workbooks
 - `odfpy` - For OpenDocument (ODS) conversion
 
 Install with:
 ```bash
-pip install pandas odfpy
+pip install openpyxl xlrd odfpy
 ```
 
 ## Best Practices

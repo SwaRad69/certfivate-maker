@@ -99,13 +99,6 @@ For help and setup instructions, see README.md
         print(f"\nSetup instructions: See SETUP_GUIDE.md", file=sys.stderr)
         return 1
     
-    # Clear checkpoint if requested
-    if args.clear_checkpoint:
-        from utils import CheckpointManager
-        checkpoint = CheckpointManager(args.output)
-        checkpoint.clear()
-        logging.info("Checkpoint cleared. All certificates will be regenerated.")
-    
     try:
         # Run certificate generation
         summary = generate_certificates(
@@ -113,7 +106,8 @@ For help and setup instructions, see README.md
             template_id=args.template,
             output_folder=args.output,
             credentials_path=str(creds_path),
-            cleanup=args.cleanup
+            cleanup=args.cleanup,
+            clear_checkpoint=args.clear_checkpoint,
         )
         
         # Print summary
@@ -137,7 +131,7 @@ For help and setup instructions, see README.md
         print("=" * 70)
         
         # Return exit code based on success
-        if summary['failed'] == 0 and summary['success'] > 0:
+        if summary['failed'] == 0 and summary['success'] + summary['skipped'] > 0:
             logging.info("Certificate generation completed successfully!")
             return 0
         elif summary['success'] > 0:

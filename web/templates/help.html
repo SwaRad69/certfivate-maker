@@ -11,7 +11,7 @@
         <ol>
             <li><strong>Design certificate</strong> in Canva with your branding</li>
             <li><strong>Export to Google Drive</strong> as PPTX file</li>
-            <li><strong>Open in Google Slides</strong> and add {{Placeholder}} text</li>
+            <li><strong>Open in Google Slides</strong> and add {% raw %}{{Placeholder}}{% endraw %} text</li>
             <li><strong>Get Template ID</strong> from Google Slides URL</li>
             <li><strong>Create CSV file</strong> with participant data</li>
             <li><strong>Upload to this app</strong> and click Generate</li>
@@ -37,17 +37,17 @@
             <li>Right-click → Open with → Google Slides</li>
             <li>Google auto-converts it for you</li>
             <li>Click on each text field that needs dynamic content</li>
-            <li>Replace with placeholders like: <code>{{Name}}</code>, <code>{{Email}}</code>, etc.</li>
-            <li><strong>Important:</strong> Placeholders must be created in Google Slides, not Canva</li>
+            <li>Replace with placeholders like: <code>{% raw %}{{Name}}{% endraw %}</code>, <code>{% raw %}{{Email}}{% endraw %}</code>, etc.</li>
+            <li>After importing from Canva, check that each placeholder displays correctly in Google Slides.</li>
         </ol>
 
         <h4>Placeholder Syntax</h4>
         <p>Use double curly braces around field names:</p>
         <ul>
-            <li><code>{{Name}}</code> → Replaced with participant name</li>
-            <li><code>{{Email}}</code> → Replaced with email address</li>
-            <li><code>{{Date}}</code> → Replaced with date</li>
-            <li><code>{{Any Custom Field}}</code> → Matches CSV column</li>
+            <li><code>{% raw %}{{Name}}{% endraw %}</code> → Replaced with participant name</li>
+            <li><code>{% raw %}{{Email}}{% endraw %}</code> → Replaced with email address</li>
+            <li><code>{% raw %}{{Date}}{% endraw %}</code> → Replaced with date</li>
+            <li><code>{% raw %}{{Any Custom Field}}{% endraw %}</code> → Matches CSV column</li>
         </ul>
     </div>
 
@@ -63,7 +63,7 @@ Bob Johnson,bob@example.com,April 13 2024,Spring Conference</pre>
         <h4>Rules:</h4>
         <ul>
             <li>First row must be column headers</li>
-            <li>Column names must <strong>exactly match</strong> placeholder names (case-sensitive)</li>
+            <li>Column names must match placeholder names. Capitalization is ignored.</li>
             <li>Each row = one certificate to generate</li>
             <li>Use <strong>Name</strong> column for PDF filename</li>
         </ul>
@@ -126,7 +126,7 @@ Bob Johnson,bob@example.com,April 13 2024,Spring Conference</pre>
         <h3>❓ Common Questions</h3>
         
         <h4>Q: Can I use different placeholder names?</h4>
-        <p>Yes! Just match your CSV column names to your template placeholders exactly.</p>
+        <p>Yes. Match your CSV column names to your template placeholders.</p>
 
         <h4>Q: What if I have extra columns in CSV?</h4>
         <p>Extra columns are ignored. Only columns matching placeholders are used.</p>
@@ -164,9 +164,9 @@ Bob Johnson,bob@example.com,April 13 2024,Spring Conference</pre>
 
         <h4>Error: "Missing CSV columns"</h4>
         <ul>
-            <li>Check CSV column names match placeholders exactly (case-sensitive)</li>
-            <li>Example: <code>{{Name}}</code> requires "Name" column in CSV</li>
-            <li>Example: <code>{{email}}</code> requires "email" column (lowercase)</li>
+            <li>Check that each placeholder has a matching CSV column</li>
+            <li>Example: <code>{% raw %}{{Name}}{% endraw %}</code> matches a "Name" column</li>
+            <li>Example: <code>{% raw %}{{email}}{% endraw %}</code> matches an "Email" column</li>
         </ul>
 
         <h4>Certificates not appearing in Drive</h4>

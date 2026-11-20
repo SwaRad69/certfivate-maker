@@ -267,6 +267,11 @@ body {
     color: white;
 }
 
+.preview-table th,
+.preview-table td {
+    white-space: pre-wrap;
+}
+
 .preview-table th {
     padding: 10px;
     text-align: left;
@@ -409,6 +414,18 @@ body {
     color: #155724;
 }
 
+.result-partial {
+    background: #fff3cd;
+    border-left: 4px solid #b7791f;
+    color: #664d03;
+}
+
+.result-pending {
+    background: #e7f1ff;
+    border-left: 4px solid var(--primary-color);
+    color: #12365a;
+}
+
 .result-error {
     background: #f8d7da;
     border-left: 4px solid var(--error-color);
@@ -417,6 +434,7 @@ body {
 
 #successDetails,
 #successMessage,
+#errorDetails,
 #errorMessage {
     margin: 15px 0;
     line-height: 1.8;

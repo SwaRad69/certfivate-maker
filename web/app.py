@@ -6,6 +6,7 @@ Users sign in with their Google account and generate certificates to their Drive
 import os
 import json
 import logging
+import re
 from functools import wraps
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ if os.environ.get('FLASK_ENV') in ('development', None) or os.environ.get('FLASK
     os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 from flask import Flask, render_template, redirect, url_for, request, session, jsonify, send_file
+from itsdangerous import BadSignature, URLSafeSerializer
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request as GoogleRequest
@@ -26,8 +28,13 @@ import google.auth
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from generator import generate_certificates_oauth2
-from file_converter import convert_to_csv, get_supported_formats
+from generator import generate_certificates_oauth2, recover_web_batch, reserve_web_batch
+from web.file_converter import (
+    get_supported_formats,
+    parse_rows,
+    read_input_records,
+    records_to_csv,
+)
 import config
 
 # Setup logging
@@ -233,22 +240,20 @@ def api_drive_file_to_csv(file_id):
         request = drive_service.files().get_media(fileId=file_id)
         file_bytes = request.execute()
         
-        # Convert to CSV
+        # Use the same headers and records that generation reads.
         try:
-            csv_content = convert_to_csv(file_bytes, filename)
+            headers, records = read_input_records(file_bytes, filename)
         except ValueError as e:
             return jsonify({'error': str(e)}), 400
         
-        # Count rows
-        rows = csv_content.strip().split('\n')
-        rows_count = max(0, len(rows) - 1)  # Subtract header row
-        
-        logger.info(f"Successfully converted {filename} to CSV ({rows_count} data rows)")
+        logger.info(f"Successfully converted {filename} to CSV ({len(records)} data rows)")
         
         return jsonify({
-            'csv_content': csv_content,
+            'csv_content': records_to_csv(headers, records),
             'filename': filename,
-            'rows_count': rows_count,
+            'headers': headers,
+            'rows': [list(record.values()) for record in records[:5]],
+            'rows_count': len(records),
             'mime_type': mime_type
         }), 200
         
@@ -317,6 +322,108 @@ def get_template_placeholders():
         return jsonify({'error': str(e)}), 500
 
 
+def generation_response(summary, input_rows=None, output_folder=None):
+    """Return a generation outcome and its row/PDF counts."""
+    summary = dict(summary)
+    successful = summary.get('successful_rows', summary.get('success', 0))
+    failed = summary.get('failed_rows', summary.get('failed', 0))
+    attempted = summary.get('attempted_rows', successful + failed)
+    created = summary.get('created_pdfs', successful)
+    pending = summary.get('pending_rows', 0)
+    selected = summary.get('total', attempted + pending)
+    errors = summary.get('errors', [])
+    summary.update(
+        total=selected,
+        success=successful,
+        failed=failed,
+        skipped=summary.get('skipped', 0),
+        errors=errors,
+        input_rows=summary.get('input_rows', selected) if input_rows is None else input_rows,
+        attempted_rows=attempted,
+        successful_rows=successful,
+        failed_rows=failed,
+        created_pdfs=created,
+        pending_rows=pending,
+    )
+
+    if summary.get('validation_failed'):
+        status, code = 'invalid_request', 400
+        message = errors[0] if errors else 'The generation request is invalid.'
+    elif pending:
+        status, code = 'pending', 202
+        message = f'{created} PDFs saved. {pending} rows are still pending.'
+    elif not created:
+        status, code = 'failed', 500
+        message = 'Generation failed. No PDFs were created.'
+    elif failed or successful < selected:
+        status, code = 'partial', 200
+        message = f'{created} PDFs saved. Some certificates could not be generated.'
+    else:
+        status, code = 'completed', 200
+        message = f'Generated {created} certificates successfully.'
+
+    result = {'success': status == 'completed', 'status': status, 'message': message, 'summary': summary}
+    if code >= 400:
+        result['error'] = errors[0] if errors else message
+    if summary.get('batch_id'):
+        result['batch_id'] = summary['batch_id']
+    if output_folder is not None:
+        result['output_folder'] = output_folder
+    return jsonify(result), code
+
+
+def invalid_generation_response(message, input_rows=0):
+    return generation_response({'validation_failed': True, 'errors': [message]}, input_rows=input_rows)
+
+
+def _batch_signer():
+    return URLSafeSerializer(
+        app.secret_key, salt=f"certificate-generation:{session.get('user_email', '')}"
+    )
+
+
+def _batch_credentials():
+    creds_data = session['credentials']
+    if isinstance(creds_data, str):
+        creds_data = json.loads(creds_data)
+    return Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
+
+
+@app.route('/api/generation-batches/new')
+@login_required
+def api_reserve_generation_batch():
+    """Reserve a retry key before the client starts the generation request."""
+    try:
+        batch_id = reserve_web_batch(_batch_credentials())
+        response = jsonify({'batch_id': _batch_signer().dumps(batch_id)})
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    except Exception:
+        logger.exception("Could not reserve a generation batch")
+        return jsonify({'error': 'Could not reserve a generation batch in Google Drive.'}), 502
+
+
+@app.route('/api/generation-batches/<token>')
+@login_required
+def api_recover_generation_batch(token):
+    """Recover a result using the same signed key after an interrupted request."""
+    try:
+        batch_id = _batch_signer().loads(token)
+    except BadSignature:
+        return invalid_generation_response('Invalid generation batch ID.')
+    try:
+        summary = recover_web_batch(_batch_credentials(), batch_id)
+        if summary is None:
+            return jsonify({'error': 'This generation batch has not started.'}), 404
+        summary['batch_id'] = token
+        response, status = generation_response(summary, output_folder=summary['output_folder'])
+        response.headers['Cache-Control'] = 'no-store'
+        return response, status
+    except Exception:
+        logger.exception("Could not recover the generation batch")
+        return jsonify({'error': 'Could not recover generation results from Google Drive.'}), 502
+
+
 @app.route('/api/generate', methods=['POST'])
 @login_required
 def api_generate():
@@ -342,111 +449,62 @@ def api_generate():
         
         # Get form data
         template_id = request.form.get('template_id', '').strip()
-        output_folder = request.form.get('output_folder', 'Certificate Generator').strip()
-        filename_field = request.form.get('filename_field', 'Name').strip()
+        output_folder = request.form.get('output_folder', '').strip() or 'Certificate Generator'
+        filename_field = request.form.get('filename_field') or 'Name'
+        batch_token = request.form.get('batch_id', '').strip()
+        batch_id = None
+        if batch_token:
+            try:
+                batch_id = _batch_signer().loads(batch_token)
+            except BadSignature:
+                return invalid_generation_response('Invalid generation batch ID.')
         
         # Validate template ID
-        if not template_id or len(template_id) < 20:
-            return jsonify({'error': 'Invalid template ID. Must be 26+ characters.'}), 400
-        
-        # Determine data source: CSV file, Excel file, or Google Sheets
-        csv_content = None
-        
-        logger.info(f"Request files: {list(request.files.keys())}")
-        logger.info(f"Request form: {list(request.form.keys())}")
-        
-        if 'csv_file' in request.files and request.files['csv_file'].filename:
-            # Method 1: File upload - supports multiple formats
-            uploaded_file = request.files['csv_file']
-            filename = uploaded_file.filename
-            
+        if not re.fullmatch(r'[A-Za-z0-9_-]{20,}', template_id):
+            return invalid_generation_response('Select or paste a valid Google Slides template ID.')
+
+        uploads = [file for file in request.files.getlist('csv_file') if file.filename]
+        has_sheets = bool(
+            request.form.get('sheets_id')
+            or request.form.get('sheets_url')
+            or request.form.get('sheet_name')
+        )
+        if len(uploads) + has_sheets != 1:
+            return invalid_generation_response('Provide exactly one data source: an uploaded or Drive file, or a Google Sheets tab')
+
+        if uploads:
+            uploaded_file = uploads[0]
             try:
-                file_bytes = uploaded_file.read()
-                csv_content = convert_to_csv(file_bytes, filename)
-                logger.info(f"Successfully converted file '{filename}' to CSV")
-                
+                _, records = read_input_records(uploaded_file.read(), uploaded_file.filename)
             except ValueError as e:
-                logger.error(f"File conversion error: {e}")
-                supported = ', '.join(get_supported_formats().keys())
-                return jsonify({'error': f'{str(e)}. Supported formats: {supported}'}), 400
-            except Exception as e:
-                logger.error(f"Error processing file: {e}")
-                return jsonify({'error': f'Failed to process file: {str(e)}'}), 400
-            
-            
-        elif request.form.get('sheets_id') or request.form.get('sheets_url'):
-            # Method 2: Google Sheets (by ID or URL)
-            sheets_id = request.form.get('sheets_id', '').strip()
-            sheets_url = request.form.get('sheets_url', '').strip()
-            sheet_name = request.form.get('sheet_name', '').strip()
-            
-            logger.info(f"Google Sheets submission: sheets_id={sheets_id[:10]}..., sheet_name={sheet_name}")
-            
-            if not sheet_name:
-                return jsonify({'error': 'Google Sheet name/tab is required. Please select a sheet tab from the dropdown and try again.'}), 400
-            
-            # Get sheet ID from either direct ID or URL
-            if sheets_id:
-                sheet_id = sheets_id
-            elif sheets_url:
-                sheet_id = extract_sheet_id(sheets_url)
-                if not sheet_id:
-                    return jsonify({'error': 'Invalid Google Sheets URL'}), 400
-            else:
-                return jsonify({'error': 'Must provide Google Sheets ID or URL'}), 400
-            
-            # Fetch data from Google Sheets
-            try:
-                sheets_service = get_sheets_service(creds)
-                result = sheets_service.spreadsheets().values().get(
-                    spreadsheetId=sheet_id,
-                    range=f"'{sheet_name}'!A:Z"
-                ).execute()
-                
-                values = result.get('values', [])
-                if not values or len(values) < 2:
-                    return jsonify({'error': 'Sheet has no data'}), 400
-                
-                # Convert to CSV format
-                import csv
-                from io import StringIO
-                csv_buffer = StringIO()
-                writer = csv.writer(csv_buffer)
-                writer.writerows(values)
-                csv_content = csv_buffer.getvalue()
-                
-            except Exception as e:
-                logger.error(f"Error reading Google Sheets: {e}")
-                return jsonify({'error': f'Failed to read Google Sheets: {str(e)}'}), 500
-        
+                supported = ', '.join(get_supported_formats())
+                return invalid_generation_response(f'{e}. Supported formats: {supported}')
         else:
-            logger.warning(f"No valid data source provided. Files: {list(request.files.keys())}, Form keys with data: {[k for k in request.form.keys() if request.form.get(k)]}")
-            return jsonify({'error': 'No data source provided. Please either upload a CSV file OR select a Google Sheet and sheet tab.'}), 400
-        
-        if not csv_content:
-            return jsonify({'error': 'No data could be extracted from the provided source'}), 400
-        
-        # Handle test mode
-        test_mode = request.form.get('test_mode', '').lower() == 'true'
-        if test_mode:
-            test_count = int(request.form.get('test_count', 10))
+            try:
+                sheet_id, sheet_name = _sheet_selection(request.form)
+            except ValueError as e:
+                return invalid_generation_response(str(e))
+            try:
+                _, records = _read_sheet_records(creds, sheet_id, sheet_name)
+            except Exception as e:
+                logger.exception("Error reading Google Sheets")
+                return generation_response({'errors': [f'Failed to read Google Sheets: {e}']})
+
+        input_rows = len(records)
+        if not input_rows:
+            return invalid_generation_response('The selected source has no data rows')
+
+        if request.form.get('test_mode', '').lower() == 'true':
+            try:
+                test_count = int(request.form.get('test_count', 10))
+            except ValueError:
+                test_count = 0
             if test_count < 1:
-                test_count = 10
-            
-            # Limit CSV to test_count rows
-            csv_lines = csv_content.split('\n')
-            header = csv_lines[0] if csv_lines else ''
-            data_rows = csv_lines[1:]
-            
-            # Keep header + test_count rows
-            limited_rows = [header] + data_rows[:test_count]
-            csv_content = '\n'.join(limited_rows)
-            
-            # Modify output folder name
+                return invalid_generation_response('First N must be a positive whole number', input_rows=input_rows)
+            records = records[:test_count]
             output_folder = f"{output_folder} (TEST)"
-            
-            logger.info(f"Test mode enabled: limiting to {test_count} certificates")
-        
+            logger.info("Test mode enabled: limiting to %d certificates", test_count)
+
         try:
             # Generate certificates with user's credentials
             logger.info(f"Starting certificate generation for {session.get('user_email', 'unknown')}")
@@ -454,34 +512,37 @@ def api_generate():
             logger.info(f"  Output folder: {output_folder}")
             
             summary = generate_certificates_oauth2(
-                csv_content=csv_content,
+                csv_content=None,
                 template_id=template_id,
                 output_folder=output_folder,
                 user_credentials=creds,
-                filename_field=filename_field
+                filename_field=filename_field,
+                records=records,
+                input_rows=input_rows,
+                batch_id=batch_id,
+                retry_failed=request.form.get('retry_failed') == 'true',
             )
+            if batch_token:
+                summary['batch_id'] = batch_token
             
-            logger.info(f"Generation complete: {summary}")
+            logger.info("Generation request finished with %s PDFs and %s failed rows",
+                        summary.get('created_pdfs', summary.get('success', 0)), summary.get('failed', 0))
             
-            return jsonify({
-                'success': True,
-                'summary': summary,
-                'message': f"Generated {summary['success']} certificates successfully!"
-            }), 200
+            return generation_response(summary, input_rows=input_rows, output_folder=output_folder)
         
         except ValueError as e:
             # Validation errors
             logger.warning(f"Validation error: {e}")
-            return jsonify({'error': str(e)}), 400
+            return invalid_generation_response(str(e), input_rows=input_rows)
         
         except Exception as e:
             # Other errors
             logger.error(f"Generation error: {e}", exc_info=True)
-            return jsonify({'error': f'Generation failed: {str(e)}'}), 500
+            return generation_response({'errors': [str(e)], 'batch_id': batch_token}, input_rows=input_rows)
     
     except Exception as e:
         logger.error(f"API error: {e}", exc_info=True)
-        return jsonify({'error': 'Internal server error'}), 500
+        return generation_response({'errors': ['Internal server error']})
 
 
 @app.route('/logout')
@@ -527,8 +588,7 @@ def api_auth_token():
 # Helper function to extract sheet ID from URL
 def extract_sheet_id(url):
     """Extract Google Sheets ID from URL."""
-    import re
-    match = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', url)
+    match = re.search(r'/spreadsheets/d/([a-zA-Z0-9_-]+)(?=[/?#]|$)', url)
     if match:
         return match.group(1)
     return None
@@ -539,6 +599,41 @@ def get_sheets_service(credentials):
     """Get Google Sheets API service."""
     from googleapiclient.discovery import build
     return build('sheets', 'v4', credentials=credentials)
+
+
+def _sheet_selection(fields):
+    """Resolve the spreadsheet ID and exact tab title from a request."""
+    sheet_id = fields.get('sheets_id') or ''
+    url = fields.get('sheets_url') or ''
+    sheet_name = fields.get('sheet_name')
+    if not all(isinstance(value, str) for value in (sheet_id, url, sheet_name)):
+        raise ValueError('Select a Google Sheets spreadsheet and tab')
+    sheet_id, url = sheet_id.strip(), url.strip()
+    if not sheet_name:
+        raise ValueError('Select a Google Sheets tab')
+
+    if sheet_id and not re.fullmatch(r'[a-zA-Z0-9_-]+', sheet_id):
+        raise ValueError('Invalid Google Sheets ID')
+    if url:
+        url_id = extract_sheet_id(url)
+        if not url_id or (sheet_id and sheet_id != url_id):
+            raise ValueError('Invalid or conflicting Google Sheets URL')
+        sheet_id = url_id
+    if not sheet_id:
+        raise ValueError('Select a Google Sheets spreadsheet')
+    return sheet_id, sheet_name
+
+
+def _read_sheet_records(credentials, sheet_id, sheet_name):
+    """Read a whole Sheets tab using the displayed values in its cells."""
+    escaped_title = sheet_name.replace("'", "''")
+    sheets_service = get_sheets_service(credentials)
+    result = sheets_service.spreadsheets().values().get(
+        spreadsheetId=sheet_id,
+        range=f"'{escaped_title}'",
+        valueRenderOption='FORMATTED_VALUE',
+    ).execute()
+    return parse_rows(result.get('values', []))
 
 
 @app.route('/api/drive/sheets', methods=['GET'])
@@ -689,115 +784,66 @@ def api_sheets_list():
         return jsonify({'error': f'Failed to load sheets: {str(e)}'}), 500
 
 
+def _sheet_records_from_request(data):
+    sheet_id, sheet_name = _sheet_selection(data)
+    creds_data = session.get('credentials')
+    if isinstance(creds_data, str):
+        creds_data = json.loads(creds_data)
+    creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
+    return _read_sheet_records(creds, sheet_id, sheet_name)
+
+
 @app.route('/api/sheets/preview', methods=['POST'])
 @login_required
 def api_sheets_preview():
-    """Get preview data from a Google Sheet."""
+    """Get preview data from a Google Sheets tab."""
     try:
-        data = request.get_json()
-        sheets_url = data.get('sheets_url', '').strip()
-        sheet_name = data.get('sheet_name', '').strip()
-        rows_to_show = int(data.get('rows', 5))
-        
-        if not sheets_url or not sheet_name:
-            return jsonify({'error': 'Missing URL or sheet name'}), 400
-        
-        # Extract sheet ID
-        sheet_id = extract_sheet_id(sheets_url)
-        if not sheet_id:
-            return jsonify({'error': 'Invalid Google Sheets URL'}), 400
-        
-        # Get user credentials
-        creds_data = session.get('credentials')
-        if isinstance(creds_data, str):
-            creds_data = json.loads(creds_data)
-        creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
-        
-        # Get data from sheet
-        sheets_service = get_sheets_service(creds)
-        result = sheets_service.spreadsheets().values().get(
-            spreadsheetId=sheet_id,
-            range=f"'{sheet_name}'!A:Z"
-        ).execute()
-        
-        values = result.get('values', [])
-        
-        if not values:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Select a Google Sheets spreadsheet and tab'}), 400
+        try:
+            rows_to_show = int(data.get('rows', 5))
+        except (TypeError, ValueError):
+            rows_to_show = 0
+        if rows_to_show < 1:
+            return jsonify({'error': 'Preview row count must be a positive whole number'}), 400
+
+        headers, records = _sheet_records_from_request(data)
+        if not headers:
             return jsonify({'error': 'No data found in sheet'}), 400
-        
-        # Extract headers and preview rows
-        headers = values[0] if values else []
-        preview_rows = values[1:rows_to_show+1] if len(values) > 1 else []
-        total_rows = len(values) - 1  # Subtract header row
-        
-        # Pad rows to match header length
-        for row in preview_rows:
-            while len(row) < len(headers):
-                row.append('')
-        
         return jsonify({
             'headers': headers,
-            'rows': preview_rows,
-            'total_rows': total_rows
+            'rows': [list(record.values()) for record in records[:rows_to_show]],
+            'total_rows': len(records),
         }), 200
-    
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
-        logger.error(f"Error previewing sheet: {e}")
-        return jsonify({'error': f'Failed to preview sheet: {str(e)}'}), 500
+        logger.exception("Error previewing sheet")
+        return jsonify({'error': f'Failed to preview sheet: {e}'}), 500
 
 
 @app.route('/api/sheets/data', methods=['POST'])
 @login_required
 def api_sheets_data():
-    """Get all data from a Google Sheet as CSV format."""
+    """Get all data from a Google Sheets tab in CSV format."""
     try:
-        data = request.get_json()
-        sheets_url = data.get('sheets_url', '').strip()
-        sheet_name = data.get('sheet_name', '').strip()
-        
-        if not sheets_url or not sheet_name:
-            return jsonify({'error': 'Missing URL or sheet name'}), 400
-        
-        # Extract sheet ID
-        sheet_id = extract_sheet_id(sheets_url)
-        if not sheet_id:
-            return jsonify({'error': 'Invalid Google Sheets URL'}), 400
-        
-        # Get user credentials
-        creds_data = session.get('credentials')
-        if isinstance(creds_data, str):
-            creds_data = json.loads(creds_data)
-        creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
-        
-        # Get all data from sheet
-        sheets_service = get_sheets_service(creds)
-        result = sheets_service.spreadsheets().values().get(
-            spreadsheetId=sheet_id,
-            range=f"'{sheet_name}'!A:Z"
-        ).execute()
-        
-        values = result.get('values', [])
-        
-        if not values or len(values) < 2:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Select a Google Sheets spreadsheet and tab'}), 400
+
+        headers, records = _sheet_records_from_request(data)
+        if not records:
             return jsonify({'error': 'Sheet has no data'}), 400
-        
-        # Convert to CSV format
-        import csv
-        from io import StringIO
-        
-        csv_buffer = StringIO()
-        writer = csv.writer(csv_buffer)
-        writer.writerows(values)
-        csv_content = csv_buffer.getvalue()
-        
         return jsonify({
-            'csv_content': csv_content,
-            'rows': len(values) - 1  # Subtract header
+            'csv_content': records_to_csv(headers, records),
+            'rows': len(records),
         }), 200
-    
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
-        logger.error(f"Error getting sheet data: {e}")
-        return jsonify({'error': f'Failed to get sheet data: {str(e)}'}), 500
+        logger.exception("Error getting sheet data")
+        return jsonify({'error': f'Failed to get sheet data: {e}'}), 500
 
 
 @app.route('/api/template/debug', methods=['POST'])

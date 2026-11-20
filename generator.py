@@ -4,20 +4,28 @@ Handles Google API interactions, template copying, text replacement, and PDF exp
 """
 
 import logging
+import tempfile
 import time
+from collections import Counter
+from io import BytesIO
 from typing import Dict, List, Tuple, Set
 from pathlib import Path
 
 from google.oauth2.service_account import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
-import pandas as pd
-from io import BytesIO
-import io
+from googleapiclient.http import MediaIoBaseUpload
 
 import config
-from utils import CheckpointManager, safe_filename
+from batch import (
+    DriveBatch,
+    content_digest,
+    delete_temp_slide,
+    drive_query_value,
+    reserve_drive_ids,
+)
+from utils import CheckpointManager, output_checkpoint_lock, safe_filename
+from web.file_converter import detect_file_format, get_supported_formats, parse_csv, read_input_records
 
 
 def authenticate_google(credentials_path: str) -> Tuple:
@@ -97,88 +105,61 @@ def get_presentation_metadata(slides_service, presentation_id: str) -> Dict:
         raise
 
 
-def detect_placeholders_in_slide(slides_service, presentation_id: str) -> Set[str]:
-    """
-    Detect all {{Placeholder}} patterns in a presentation.
-    Handles Canva-imported PPTX files where text may be split across
-    multiple text runs (e.g., '{{', 'Name', '}}' as separate runs).
-    
-    Args:
-        slides_service: Google Slides API service
-        presentation_id: ID of the presentation
-        
-    Returns:
-        Set of unique placeholder names (without curly braces)
-        
-    Example:
-        Returns: {'Name', 'Email', 'Date'}
-    """
-    try:
-        presentation = slides_service.presentations().get(
-            presentationId=presentation_id
-        ).execute()
-        
-        placeholders = set()
-        
-        def extract_from_text_elements(text_elements):
-            """Concatenate all text runs then search for placeholders."""
-            # First try individual runs
-            for text_elem in text_elements:
-                text = text_elem.get('textRun', {}).get('content', '')
-                matches = config.PLACEHOLDER_PATTERN.findall(text)
-                placeholders.update(matches)
-            
-            # Also concatenate all runs and search (handles split text)
-            full_text = ''.join(
-                elem.get('textRun', {}).get('content', '')
-                for elem in text_elements
+def _placeholder_name(match):
+    return match.group(1).lower().strip("\"'")
+
+
+def _slide_text_elements(page_elements):
+    for element in page_elements:
+        object_id = element.get('objectId')
+        for kind in ('shape', 'textBox'):
+            section = element.get(kind)
+            if section is not None:
+                yield (object_id, None), section
+
+        for row_index, row in enumerate(element.get('table', {}).get('tableRows', [])):
+            column_index = 0
+            for cell in row.get('tableCells', []):
+                location = cell.get('location', {})
+                row_number = location.get('rowIndex', row_index)
+                column_number = location.get('columnIndex', column_index)
+                yield (object_id, (row_number, column_number)), cell
+                column_index = column_number + cell.get('columnSpan', 1)
+
+        yield from _slide_text_elements(element.get('elementGroup', {}).get('children', []))
+
+
+def _presentation_text(presentation):
+    for slide in presentation.get('slides', []):
+        for location, section in _slide_text_elements(slide.get('pageElements', [])):
+            text_elements = section.get('text', {}).get('textElements', []) or section.get('textElements', [])
+            # Paragraph markers describe the runs and carry no additional text.
+            text = ''.join(
+                element.get('textRun', element.get('autoText', {})).get('content', '')
+                for element in text_elements
             )
-            matches = config.PLACEHOLDER_PATTERN.findall(full_text)
-            placeholders.update(matches)
-        
-        for slide in presentation.get('slides', []):
-            for element in slide.get('pageElements', []):
-                # Check shapes (includes text boxes in Slides API)
-                if 'shape' in element:
-                    text_elems = element['shape'].get('text', {}).get('textElements', [])
-                    if not text_elems:
-                        # Fallback: some older structures
-                        text_elems = element['shape'].get('textElements', [])
-                    extract_from_text_elements(text_elems)
-                
-                # Check textBox (rare, but possible)
-                if 'textBox' in element:
-                    text_elems = element['textBox'].get('text', {}).get('textElements', [])
-                    if not text_elems:
-                        text_elems = element['textBox'].get('textElements', [])
-                    extract_from_text_elements(text_elems)
-                
-                # Check tables
-                if 'table' in element:
-                    table = element['table']
-                    for row in table.get('tableRows', []):
-                        for cell in row.get('tableCells', []):
-                            text_elems = cell.get('text', {}).get('textElements', [])
-                            if not text_elems:
-                                text_elems = cell.get('textElements', [])
-                            extract_from_text_elements(text_elems)
-        
-        # Normalize placeholders to lowercase and remove surrounding quotes
-        normalized_placeholders = {p.lower().strip('"\'') for p in placeholders}
-        logging.info(f"Detected placeholders: {normalized_placeholders}")
-        return normalized_placeholders
-        
-    except Exception as e:
-        logging.error(f"Failed to detect placeholders: {e}")
-        raise
+            yield location, text
+
+
+def detect_placeholders_in_slide(slides_service, presentation_id: str, *, presentation=None) -> Set[str]:
+    """Read placeholder names, joining text runs within each shape or table cell."""
+    if presentation is None:
+        presentation = get_presentation_metadata(slides_service, presentation_id)
+    placeholders = {
+        _placeholder_name(match)
+        for _, text in _presentation_text(presentation)
+        for match in config.PLACEHOLDER_PATTERN.finditer(text)
+    }
+    logging.info("Detected placeholders: %s", placeholders)
+    return placeholders
 
 
 def read_csv(file_path: str) -> List[Dict]:
     """
-    Read CSV file and return as list of dictionaries.
+    Read certificate data as a list of text-valued records.
     
     Args:
-        file_path: Path to CSV file
+        file_path: Path to a CSV file or other supported input
         
     Returns:
         List of dicts, one per row
@@ -188,14 +169,12 @@ def read_csv(file_path: str) -> List[Dict]:
         ValueError: If CSV is invalid or empty
     """
     try:
-        df = pd.read_csv(file_path)
-        
-        if df.empty:
-            raise ValueError("CSV file is empty")
-        
-        rows = df.to_dict(orient='records')
-        logging.info(f"Loaded CSV with {len(rows)} rows and columns: {list(df.columns)}")
-        
+        path = Path(file_path)
+        filename = path.name if detect_file_format(path.name) in get_supported_formats() else 'input.csv'
+        headers, rows = read_input_records(path.read_bytes(), filename)
+        if not rows:
+            raise ValueError("Input file has no data rows")
+        logging.info("Loaded %d rows and columns: %s", len(rows), headers)
         return rows
         
     except FileNotFoundError:
@@ -245,7 +224,9 @@ def validate_csv_placeholders(csv_rows: List[Dict], detected_placeholders: Set[s
     return is_valid, issues
 
 
-def duplicate_slide_template(drive_service, template_id: str, row_index: int) -> str:
+def duplicate_slide_template(
+    drive_service, template_id: str, row_index: int, *, template_metadata=None, batch_properties=None
+) -> str:
     """
     Create a copy of the template slide on Google Drive.
     
@@ -262,10 +243,9 @@ def duplicate_slide_template(drive_service, template_id: str, row_index: int) ->
     """
     try:
         # Get original file metadata
-        original = drive_service.files().get(
-            fileId=template_id,
-            fields='name, parents'
-        ).execute()
+        original = template_metadata
+        if original is None:
+            original = _template_drive_metadata(drive_service, template_id)
         
         # Create copy with unique name
         copy_name = f"{original['name']}_cert_{row_index}_{int(time.time())}"
@@ -274,9 +254,15 @@ def duplicate_slide_template(drive_service, template_id: str, row_index: int) ->
             'parents': original.get('parents', []),
         }
         
+        if batch_properties is not None:
+            copy_metadata['parents'] = ['root']
+            copy_metadata['appProperties'] = batch_properties
+
         copied_file = drive_service.files().copy(
             fileId=template_id,
-            body=copy_metadata
+            body=copy_metadata,
+            supportsAllDrives=True,
+            fields='id',
         ).execute()
         
         new_id = copied_file['id']
@@ -289,506 +275,450 @@ def duplicate_slide_template(drive_service, template_id: str, row_index: int) ->
         raise
 
 
-def replace_text_in_slide(slides_service, presentation_id: str, replacements: Dict[str, str]) -> bool:
-    """
-    Replace all {{Placeholder}} with values from replacements dict.
-    Handles Canva-imported templates where placeholder text may be split
-    across multiple text runs (e.g., '{{', 'Name', '}}' as separate runs).
-    
-    Strategy:
-      1. Try the standard findReplace API first.
-      2. If findReplace reports 0 occurrences replaced, fall back to manual
-         run-level text manipulation that handles split runs.
-    
-    Args:
-        slides_service: Google Slides API service
-        presentation_id: ID of presentation to update
-        replacements: Dict mapping placeholder names to values
-        
-    Returns:
-        True if successful, False otherwise
-        
-    Example:
-        replacements = {'Name': 'John Doe', 'Email': 'john@example.com'}
-    """
-    import re
-
-    if not replacements:
-        logging.warning(f"No replacements to make for presentation {presentation_id}")
-        return True
-
-    try:
-        # ── Step 1: Try standard findReplace first ──────────────────────
-        requests = []
-        for placeholder, value in replacements.items():
-            find_text = f"{{{{{placeholder}}}}}"
-            requests.append({
-                'replaceAllText': {
-                    'containsText': {
-                        'text': find_text,
-                        'matchCase': False,
-                    },
-                    'replaceText': str(value),
-                }
-            })
-
-        body = {'requests': requests}
-        response = slides_service.presentations().batchUpdate(
-            presentationId=presentation_id,
-            body=body
-        ).execute()
-
-        # Check how many occurrences were actually replaced
-        total_replaced = 0
-        for reply in response.get('replies', []):
-            total_replaced += reply.get('replaceAllText', {}).get('occurrencesChanged', 0)
-
-        if total_replaced > 0:
-            logging.debug(
-                f"findReplace replaced {total_replaced} occurrences in {presentation_id}"
-            )
-            return True
-
-        logging.info(
-            f"findReplace found 0 occurrences in {presentation_id} — "
-            "falling back to manual run-level replacement"
-        )
-
-        # ── Step 2: Manual run-level replacement for split runs ─────────
-        return _replace_text_manual(slides_service, presentation_id, replacements)
-
-    except Exception as e:
-        logging.error(f"Failed to replace text in presentation: {e}")
-        return False
+def _format_occurrences(occurrences):
+    return ', '.join(f'{name} ({count})' for name, count in sorted(occurrences.items()))
 
 
-def _replace_text_manual(
-    slides_service, presentation_id: str, replacements: Dict[str, str]
+def _manual_replacement_requests(text_by_location, values):
+    for (object_id, cell), text in text_by_location.items():
+        matches = list(config.PLACEHOLDER_PATTERN.finditer(text))
+        if not matches:
+            continue
+        target = {'objectId': object_id}
+        if cell is not None:
+            target['cellLocation'] = {'rowIndex': cell[0], 'columnIndex': cell[1]}
+        # Slides indexes UTF-16 code units. Editing right to left keeps the
+        # ranges of earlier occurrences valid, including repeats in one shape.
+        for match in reversed(matches):
+            value = values[_placeholder_name(match)]
+            start = len(text[:match.start()].encode('utf-16-le')) // 2
+            end = start + len(match.group().encode('utf-16-le')) // 2
+            yield {'deleteText': {**target, 'textRange': {
+                'type': 'FIXED_RANGE', 'startIndex': start, 'endIndex': end,
+            }}}
+            if value:
+                yield {'insertText': {**target, 'insertionIndex': start, 'text': value}}
+
+
+def replace_text_in_slide(
+    slides_service, presentation_id: str, replacements: Dict[str, str], *, raise_on_failure=False
 ) -> bool:
-    """
-    Fallback replacement that handles placeholders split across multiple
-    Google Slides text runs.
-
-    Algorithm per text element (shape / textBox / table cell):
-      1. Concatenate all runs into one string.
-      2. Search for {{Placeholder}} patterns.
-      3. For each match, map the character range back to the original runs,
-         build deleteText + insertText requests with correct indices.
-    """
-    import re
-
+    """Apply and verify every original placeholder occurrence before PDF export."""
     try:
-        presentation = slides_service.presentations().get(
-            presentationId=presentation_id
-        ).execute()
-
-        all_requests: list = []
-
-        def _process_text_element(page_element_id: str, text_elements: list):
-            """Process a single text element and collect replacement requests."""
-            # Build a map: for each character position in the concatenated text,
-            # record the cumulative start index of each run (in Slides coordinates).
-            runs = []
-            for te in text_elements:
-                tr = te.get('textRun')
-                if tr is None:
-                    continue
-                content = tr.get('content', '')
-                start_index = te.get('startIndex', 0)
-                end_index = te.get('endIndex', start_index + len(content))
-                runs.append({
-                    'content': content,
-                    'startIndex': start_index,
-                    'endIndex': end_index,
-                })
-
-            if not runs:
-                return
-
-            full_text = ''.join(r['content'] for r in runs)
-
-            # Build char-position → slides-index mapping
-            char_to_slides_index = []
-            for run in runs:
-                for i in range(len(run['content'])):
-                    char_to_slides_index.append(run['startIndex'] + i)
-
-            for placeholder, value in replacements.items():
-                # Use case-insensitive regex to find placeholders
-                pattern = r'\{\{' + re.escape(placeholder) + r'\}\}'
-                matches = list(re.finditer(pattern, full_text, re.IGNORECASE))
-                
-                for match in matches:
-                    idx = match.start()
-                    match_len = match.end() - match.start()
-
-                    # Map char range back to Slides startIndex / endIndex
-                    slides_start = char_to_slides_index[idx]
-                    slides_end_char = idx + match_len - 1
-                    if slides_end_char < len(char_to_slides_index):
-                        slides_end = char_to_slides_index[slides_end_char] + 1
-                    else:
-                        slides_end = runs[-1]['endIndex']
-
-                    # Delete the placeholder characters, then insert value
-                    all_requests.append({
-                        'deleteText': {
-                            'objectId': page_element_id,
-                            'textRange': {
-                                'type': 'FIXED_RANGE',
-                                'startIndex': slides_start,
-                                'endIndex': slides_end,
-                            }
-                        }
-                    })
-                    all_requests.append({
-                        'insertText': {
-                            'objectId': page_element_id,
-                            'insertionIndex': slides_start,
-                            'text': str(value),
-                        }
-                    })
-
-                    # Only handle first occurrence per element to avoid
-                    # index-shifting issues; re-read would be needed for
-                    # multiple occurrences in the same element.
-                    break
-
-        # Walk every page element on every slide
-        for slide in presentation.get('slides', []):
-            for element in slide.get('pageElements', []):
-                eid = element.get('objectId')
-
-                if 'shape' in element:
-                    text_elems = element['shape'].get('text', {}).get('textElements', [])
-                    _process_text_element(eid, text_elems)
-
-                elif 'textBox' in element:
-                    text_elems = element['textBox'].get('text', {}).get('textElements', [])
-                    _process_text_element(eid, text_elems)
-
-                elif 'table' in element:
-                    table = element['table']
-                    for row in table.get('tableRows', []):
-                        for cell in row.get('tableCells', []):
-                            cell_text_elems = cell.get('text', {}).get('textElements', [])
-                            # Table cells reference by objectId + cell location
-                            _process_text_element(eid, cell_text_elems)
-
-        if not all_requests:
-            logging.warning(
-                f"Manual replacement also found no placeholders in {presentation_id}"
-            )
-            return True
-
-        # Execute all delete + insert requests in one batch
-        slides_service.presentations().batchUpdate(
-            presentationId=presentation_id,
-            body={'requests': all_requests}
-        ).execute()
-
-        logging.info(
-            f"Manual replacement made {len(all_requests)} operations in {presentation_id}"
-        )
+        _replace_and_verify(slides_service.presentations(), presentation_id, replacements)
         return True
-
-    except Exception as e:
-        logging.error(f"Manual text replacement failed for {presentation_id}: {e}")
+    except Exception as error:
+        logging.error("Failed to replace text in presentation %s: %s", presentation_id, error)
+        if raise_on_failure:
+            raise
         return False
+
+
+def _replace_and_verify(presentations, presentation_id, replacements):
+    def read_text():
+        presentation = presentations.get(presentationId=presentation_id).execute()
+        return dict(_presentation_text(presentation))
+
+    def update(requests):
+        return presentations.batchUpdate(
+            presentationId=presentation_id, body={'requests': requests}
+        ).execute()
+
+    original = read_text()
+    matches = [
+        match for text in original.values() for match in config.PLACEHOLDER_PATTERN.finditer(text)
+    ]
+    if not matches:
+        return
+
+    values = {
+        key.lower(): str(value).replace('\r\n', '\n').replace('\r', '\n')
+        for key, value in replacements.items()
+    }
+    missing = Counter(_placeholder_name(match) for match in matches if _placeholder_name(match) not in values)
+    if missing:
+        raise ValueError(f"Missing replacement values for placeholders: {_format_occurrences(missing)}")
+
+    expected = {
+        location: config.PLACEHOLDER_PATTERN.sub(lambda match: values[_placeholder_name(match)], text)
+        for location, text in original.items()
+    }
+
+    actual = original
+    # Native find-and-replace preserves formatting when it finds the token.
+    # Use positional updates when values include braces so they stay literal
+    # and cannot become input to a subsequent native replacement.
+    if not any('{' in value or '}' in value for value in values.values()):
+        native = {}
+        for match in matches:
+            native.setdefault(match.group().lower(), match)
+        response = update([
+            {'replaceAllText': {
+                'containsText': {'text': match.group(), 'matchCase': False},
+                'replaceText': values[_placeholder_name(match)],
+            }}
+            for match in native.values()
+        ])
+        native_counts = {
+            literal: reply.get('replaceAllText', {}).get('occurrencesChanged', 0)
+            for literal, reply in zip(native, response.get('replies', []))
+        }
+        expected_counts = Counter(match.group().lower() for match in matches)
+        logging.debug("Native placeholder counts in %s: %s of %s", presentation_id, native_counts, expected_counts)
+        # Counts alone cannot establish that the right text was inserted or
+        # that Slides found every occurrence spread across text runs.
+        actual = read_text()
+
+    remaining = {
+        location: text for location, text in actual.items()
+        if text != expected.get(location) and config.PLACEHOLDER_PATTERN.search(text)
+    }
+    if remaining:
+        unknown = Counter(
+            _placeholder_name(match)
+            for text in remaining.values()
+            for match in config.PLACEHOLDER_PATTERN.finditer(text)
+            if _placeholder_name(match) not in values
+        )
+        if unknown:
+            raise ValueError(f"Unresolved placeholders: {_format_occurrences(unknown)}")
+        update(list(_manual_replacement_requests(remaining, values)))
+        actual = read_text()
+
+    # An empty shape or cell may omit the otherwise implicit final newline.
+    differences = [
+        location for location in actual.keys() | expected.keys()
+        if (actual.get(location) or '\n') != (expected.get(location) or '\n')
+    ]
+    if differences:
+        unresolved = Counter(
+            _placeholder_name(match)
+            for location in differences
+            for match in config.PLACEHOLDER_PATTERN.finditer(actual.get(location, ''))
+        )
+        if unresolved:
+            raise ValueError(f"Unresolved placeholders: {_format_occurrences(unresolved)}")
+        raise ValueError("Slides text differs from the expected replacement. Check the template and values.")
 
 
 def export_slide_to_pdf(drive_service, presentation_id: str, output_folder: str, filename: str) -> bool:
-    """
-    Export a presentation as PDF and save to output folder.
-    
-    Args:
-        drive_service: Google Drive API service
-        presentation_id: ID of presentation to export
-        output_folder: Path to output folder
-        filename: Name for output file (without extension)
-        
-    Returns:
-        True if successful, False otherwise
-    """
+    """Export a presentation to a local PDF and publish it atomically."""
+    pdf_path = Path(output_folder) / f"{safe_filename(filename)}.pdf"
+    temp_path = None
     try:
-        # Use Google Drive's native export to PDF
-        export_url = (
-            f"https://www.googleapis.com/drive/v3/files/{presentation_id}/export"
-            f"?mimeType={config.PDF_MIME_TYPE}&key={''}"  # Key handled by service account auth
-        )
-        
-        # Direct download via Drive API
-        request = drive_service.files().export_media(
-            fileId=presentation_id,
-            mimeType=config.PDF_MIME_TYPE
-        )
-        
-        file_io = BytesIO()
-        downloader = MediaIoBaseDownload(file_io, request)
-        
-        done = False
-        while not done:
-            status, done = downloader.next_chunk()
-        
-        # Save to file
-        safe_name = safe_filename(filename)
-        pdf_path = Path(output_folder) / f"{safe_name}.pdf"
-        
-        with open(pdf_path, 'wb') as f:
-            f.write(file_io.getvalue())
-        
-        logging.info(f"Exported PDF: {pdf_path}")
+        pdf_content = drive_service.files().export_media(
+            fileId=presentation_id, mimeType=config.PDF_MIME_TYPE
+        ).execute()
+        if not pdf_content:
+            raise RuntimeError("Drive returned an empty PDF.")
+        with tempfile.NamedTemporaryFile(dir=output_folder, suffix='.tmp', delete=False) as temporary:
+            temp_path = Path(temporary.name)
+            temporary.write(pdf_content)
+        temp_path.replace(pdf_path)
+        logging.info("Exported PDF: %s", pdf_path)
         return True
-        
-    except Exception as e:
-        logging.error(f"Failed to export PDF for {presentation_id}: {e}")
+    except Exception as error:
+        logging.error("Failed to export PDF for %s: %s", presentation_id, error)
         return False
+    finally:
+        if temp_path:
+            temp_path.unlink(missing_ok=True)
 
 
-def cleanup_temp_slides(drive_service, temp_slide_ids: Dict[int, str]) -> None:
-    """
-    Delete temporary slide copies from Google Drive.
-    
-    Args:
-        drive_service: Google Drive API service
-        temp_slide_ids: Dict of row_index -> slide_id
-    """
-    if not temp_slide_ids:
-        return
-    
-    deleted_count = 0
-    for row_idx, slide_id in temp_slide_ids.items():
+def cleanup_temp_slides(drive_service, temp_slide_ids):
+    """Return the checkpoint keys of successfully cleaned-up Slides copies."""
+    files = drive_service.files()
+    deleted = [
+        row_key for row_key, slide_id in temp_slide_ids.items()
+        if delete_temp_slide(files, slide_id)
+    ]
+    logging.info("Cleanup complete: deleted %s temporary slides", len(deleted))
+    return deleted
+
+
+WEB_BATCH_WORK_SECONDS = 18
+
+
+def _template_drive_metadata(drive_service, template_id):
+    return drive_service.files().get(
+        fileId=template_id, fields='name,parents,version', supportsAllDrives=True
+    ).execute()
+
+
+def _template_version(files, template_id):
+    return files.get(fileId=template_id, fields='version', supportsAllDrives=True).execute().get('version')
+
+
+def _drive_service(user_credentials):
+    return build('drive', config.DRIVE_API_VERSION, credentials=user_credentials)
+
+
+def reserve_web_batch(user_credentials):
+    return reserve_drive_ids(_drive_service(user_credentials).files(), 1)[0]
+
+
+def recover_web_batch(user_credentials, batch_id):
+    batch = DriveBatch(_drive_service(user_credentials).files(), batch_id)
+    if batch.load() is None:
+        return None
+    batch.refresh_outcomes()
+    return _web_batch_result(batch, sweep=True)
+
+
+def _web_batch_result(batch, *, sweep=False, cleanup_pending=False, interruption=None):
+    summary = batch.summary()
+    completed = summary['success'] == summary['total']
+    if completed:
+        cleanup_pending = not delete_temp_slide(batch.files, batch.manifest['snapshot_id']) or cleanup_pending
+    if sweep:
         try:
-            drive_service.files().delete(fileId=slide_id).execute()
-            deleted_count += 1
-            logging.debug(f"Deleted temp slide {slide_id}")
-        except Exception as e:
-            logging.warning(f"Failed to delete temp slide {slide_id}: {e}")
-    
-    logging.info(f"Cleanup complete: deleted {deleted_count} temporary slides")
+            cleanup_pending = not batch.clean_abandoned_slides(completed=completed) or cleanup_pending
+        except Exception:
+            logging.exception("Could not sweep temporary slides for batch %s", batch.batch_id)
+            cleanup_pending = True
+    if cleanup_pending:
+        summary['cleanup_pending'] = True
+    if interruption:
+        summary['errors'].append(interruption)
+    return summary
+
+
+def _snapshot_web_template(drive_service, template_id, metadata, batch_id):
+    files = drive_service.files()
+    snapshot_id = files.copy(
+        fileId=template_id,
+        body={
+            'name': 'Certificate generation template snapshot',
+            'parents': ['root'],
+            'appProperties': {'certificateBatch': batch_id},
+        },
+        supportsAllDrives=True,
+        fields='id',
+    ).execute()['id']
+    try:
+        source_version = _template_version(files, template_id)
+        if source_version != metadata.get('version'):
+            raise ValueError("The template changed while the batch was starting. Start a new batch.")
+    except Exception:
+        delete_temp_slide(files, snapshot_id)
+        raise
+    return snapshot_id
 
 
 def generate_certificates_oauth2(
-    csv_content: str,
+    csv_content: str | None,
     template_id: str,
     output_folder: str,
     user_credentials,
-    filename_field: str = 'Name'
+    filename_field: str = 'Name',
+    *,
+    records: List[Dict] | None = None,
+    input_rows: int | None = None,
+    batch_id=None,
+    retry_failed=False,
+    work_seconds=WEB_BATCH_WORK_SECONDS,
 ) -> Dict:
-    """
-    Generate certificates using user's OAuth2 credentials.
-    Certificates are saved to user's Google Drive in specified folder.
-    
-    Args:
-        csv_content: CSV content as string (from file upload)
-        template_id: Google Slides template ID
-        output_folder: Drive folder name to save certificates
-        user_credentials: OAuth2 credentials object from user
-        filename_field: CSV column name to use for certificate filenames (default: 'Name')
-        
-    Returns:
-        Dict with summary: {total, success, failed, skipped, errors}
-    """
-    import io
-    
-    try:
-        # Build services with user's credentials
-        slides_service = build(
-            'slides',
-            config.SLIDES_API_VERSION,
-            credentials=user_credentials
-        )
-        drive_service = build(
-            'drive',
-            config.DRIVE_API_VERSION,
-            credentials=user_credentials
-        )
-        
-        logging.info("Authenticated with user's Google account")
-        
-        # Parse CSV from string
-        csv_file = io.StringIO(csv_content)
-        df = pd.read_csv(csv_file)
-        
-        if df.empty:
-            raise ValueError("CSV is empty")
-        
-        csv_rows = df.to_dict(orient='records')
-        logging.info(f"Loaded CSV with {len(csv_rows)} rows")
-        
-        # Detect placeholders from template
+    """Generate Drive PDFs, optionally resuming a durable, time-bounded batch."""
+    if records is None:
+        records = parse_csv(csv_content)[1]
+    if not records:
+        raise ValueError("The selected data source has no certificate records.")
+
+    input_rows = len(records) if input_rows is None else input_rows
+    identity = content_digest([template_id, output_folder, filename_field, input_rows, records])
+    deadline = time.monotonic() + work_seconds if batch_id else float('inf')
+    slides_service = build('slides', config.SLIDES_API_VERSION, credentials=user_credentials)
+    drive_service = _drive_service(user_credentials)
+    files = drive_service.files()
+    batch = DriveBatch(files, batch_id) if batch_id else None
+    manifest = batch.load() if batch else None
+    template_metadata = None
+
+    if manifest is None:
+        template_metadata = _template_drive_metadata(drive_service, template_id)
         detected_placeholders = detect_placeholders_in_slide(slides_service, template_id)
-        
-        # Validate CSV vs placeholders
-        is_valid, issues = validate_csv_placeholders(csv_rows, detected_placeholders)
+        is_valid, issues = validate_csv_placeholders(records, detected_placeholders)
         if not is_valid:
-            logging.error(f"CSV validation failed: {issues}")
-            return {'total': 0, 'success': 0, 'failed': len(csv_rows), 'skipped': 0, 'errors': issues}
-        
-        # Find or create output folder in Drive
-        folder_id = _find_or_create_drive_folder(drive_service, output_folder)
-        
-        # Main loop
-        summary = {
-            'total': len(csv_rows),
-            'success': 0,
-            'failed': 0,
-            'skipped': 0,
-            'errors': []
-        }
-        
-        from tqdm import tqdm
-        
-        for row_idx, row in tqdm(enumerate(csv_rows), total=len(csv_rows), desc="Generating certificates"):
-            
+            return {
+                'input_rows': input_rows, 'total': len(records), 'attempted_rows': 0,
+                'success': 0, 'failed': 0, 'skipped': 0, 'created_pdfs': 0,
+                'validation_failed': True, 'errors': issues,
+            }
+        if batch:
+            folder_id = _find_drive_folder(drive_service, output_folder)
+            snapshot_id = _snapshot_web_template(drive_service, template_id, template_metadata, batch_id)
+            manifest = batch.create(
+                identity=identity, input_rows=input_rows, rows=len(records),
+                snapshot_id=snapshot_id,
+                template_metadata=template_metadata, placeholders=detected_placeholders,
+                folder_id=folder_id,
+                folder_name=output_folder,
+            )
+            if manifest['snapshot_id'] != snapshot_id:
+                delete_temp_slide(files, snapshot_id)
+        else:
+            folder_id = _find_or_create_drive_folder(drive_service, output_folder)
+
+    if batch and manifest['identity'] != identity:
+        raise ValueError("The data, template, or output settings differ from the original batch.")
+
+    cleanup_pending = False
+    try:
+        success = 0
+        errors = []
+        candidates = range(len(records))
+        if batch:
+            batch.refresh_outcomes()
+            batch.clean_abandoned_slides()
+            pending = [i for i in candidates if i not in batch.successes and i not in batch.failures]
+            failed = sorted(batch.failures.keys() - batch.successes) if retry_failed else []
+            candidates = pending + failed
+            if not candidates:
+                return _web_batch_result(batch, sweep=True)
+
+            template_id = manifest['snapshot_id']
+            template_metadata = manifest['template']
+            detected_placeholders = set(manifest['placeholders'])
+            folder_id = batch.ensure_output_folder()
+
+        for row_idx in candidates:
+            if time.monotonic() >= deadline:
+                break
+
+            row = records[row_idx]
+            if batch and batch.pdf_exists(row_idx):
+                continue
+            if batch and not retry_failed and batch.existing_failure(row_idx):
+                continue
+
+            filename = next(
+                (str(value) for key, value in row.items() if key.lower() == filename_field.lower()),
+                '',
+            ) or f'certificate_{row_idx}'
+            replacements = {
+                key.lower(): str(value)
+                for key, value in row.items()
+                if key.lower() in detected_placeholders
+            }
+            temp_slide_id = None
             try:
-                # Get filename from specified column (case-insensitive)
-                filename_value = None
-                for key in row.keys():
-                    if key.lower() == filename_field.lower():
-                        filename_value = str(row[key])
-                        break
-                
-                if filename_value is None:
-                    filename_value = f'certificate_{row_idx}'
-                
-                filename = filename_value
-                
-                # Duplicate template
-                temp_slide_id = duplicate_slide_template(drive_service, template_id, row_idx)
-                
-                # Prepare replacements (case-insensitive matching with CSV columns)
-                replacements = {k.lower(): str(v) for k, v in row.items() if k.lower() in detected_placeholders}
-                
-                # Replace text
-                if not replace_text_in_slide(slides_service, temp_slide_id, replacements):
-                    raise Exception("Text replacement failed")
-                
-                # Export to PDF and save to folder
-                if not export_slide_to_pdf_drive(drive_service, temp_slide_id, filename, folder_id):
-                    raise Exception("PDF export failed")
-                
-                # Cleanup temp slide
-                try:
-                    drive_service.files().delete(fileId=temp_slide_id).execute()
-                    logging.debug(f"Deleted temp slide {temp_slide_id}")
-                except Exception as e:
-                    logging.warning(f"Failed to delete temp slide: {e}")
-                
-                summary['success'] += 1
-            
-            except Exception as e:
-                error_msg = f"Row {row_idx}: {str(e)}"
-                logging.error(error_msg)
-                summary['failed'] += 1
-                summary['errors'].append(error_msg)
-        
-        logging.info(
-            f"Certificate generation complete: "
-            f"{summary['success']} success, {summary['failed']} failed"
+                temp_slide_id = duplicate_slide_template(
+                    drive_service, template_id, row_idx, template_metadata=template_metadata,
+                    batch_properties=batch.properties(row_idx) if batch else {},
+                )
+                if (batch is None and len(records) > 1
+                        and _template_version(files, template_id) != template_metadata.get('version')):
+                    raise RuntimeError("The Google Slides template changed during generation. Start a new batch.")
+                if not replace_text_in_slide(
+                    slides_service, temp_slide_id, replacements, raise_on_failure=True
+                ):
+                    raise RuntimeError("Text replacement failed.")
+                if not export_slide_to_pdf_drive(
+                    drive_service, temp_slide_id, filename, folder_id,
+                    file_id=batch.manifest['pdf_ids'][row_idx] if batch else None,
+                    app_properties=batch.properties(row_idx) if batch else None,
+                    raise_on_failure=True,
+                ):
+                    raise RuntimeError("PDF export failed.")
+                if batch:
+                    batch.successes.add(row_idx)
+                success += 1
+            except Exception as error:
+                message = f"Row {row_idx + 1}: {error}"[:2000]
+                logging.error(message)
+                if batch:
+                    # An upload can succeed even when the response is lost.
+                    if not batch.pdf_exists(row_idx):
+                        batch.record_failure(row_idx, message)
+                else:
+                    errors.append(message)
+            finally:
+                if temp_slide_id and not delete_temp_slide(files, temp_slide_id):
+                    cleanup_pending = True
+
+        if batch:
+            return _web_batch_result(batch, cleanup_pending=cleanup_pending)
+        return {
+            'input_rows': input_rows, 'total': len(records), 'attempted_rows': len(records),
+            'success': success, 'failed': len(errors), 'skipped': 0,
+            'created_pdfs': success, 'errors': errors,
+        }
+    except Exception as error:
+        if batch is None:
+            raise
+        logging.exception("Generation was interrupted for batch %s", batch.batch_id)
+        return _web_batch_result(
+            batch, cleanup_pending=cleanup_pending,
+            interruption=f"Generation paused after a Drive error. Check batch status or resume. {error}"[:2000],
         )
-        
-        return summary
-    
-    except Exception as e:
-        logging.error(f"Fatal error in generate_certificates_oauth2: {e}")
-        return {'total': 0, 'success': 0, 'failed': 0, 'skipped': 0, 'errors': [str(e)]}
+
+
+
+def _find_drive_folder(drive_service, folder_name):
+    name = drive_query_value(folder_name)
+    result = drive_service.files().list(
+        q=f"name='{name}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
+        spaces='drive',
+        fields='files(id)',
+        pageSize=10,
+    ).execute()
+    folders = result.get('files', [])
+    return folders[0]['id'] if folders else None
 
 
 def _find_or_create_drive_folder(drive_service, folder_name: str) -> str:
-    """
-    Find existing folder in Drive or create it.
-    Returns folder ID.
-    """
-    try:
-        # Search for folder
-        query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        results = drive_service.files().list(
-            q=query,
-            spaces='drive',
-            fields='files(id, name)',
-            pageSize=10
-        ).execute()
-        
-        files = results.get('files', [])
-        if files:
-            logging.info(f"Found existing folder: {files[0]['id']}")
-            return files[0]['id']
-        
-        # Create new folder
-        file_metadata = {
-            'name': folder_name,
-            'mimeType': 'application/vnd.google-apps.folder'
-        }
-        folder = drive_service.files().create(body=file_metadata, fields='id').execute()
-        folder_id = folder.get('id')
-        logging.info(f"Created new folder: {folder_id}")
-        
+    folder_id = _find_drive_folder(drive_service, folder_name)
+    if folder_id:
         return folder_id
-    
-    except Exception as e:
-        logging.error(f"Failed to manage Drive folder: {e}")
-        raise
+    return drive_service.files().create(
+        body={'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'},
+        fields='id',
+    ).execute()['id']
 
 
 def export_slide_to_pdf_drive(
     drive_service,
     presentation_id: str,
     filename: str,
-    output_folder_id: str
+    output_folder_id: str,
+    *,
+    file_id=None,
+    app_properties=None,
+    raise_on_failure=False,
 ) -> bool:
-    """
-    Export slide to PDF and save directly to Drive folder.
-    
-    Args:
-        drive_service: Google Drive API service
-        presentation_id: ID of presentation to export
-        filename: Name for output file
-        output_folder_id: Google Drive folder ID where to save
-        
-    Returns:
-        True if successful
-    """
+    """Export Slides and upload a PDF using a fixed Drive ID when supplied."""
+    files = drive_service.files()
     try:
-        # Export to PDF
-        request = drive_service.files().export_media(
-            fileId=presentation_id,
-            mimeType=config.PDF_MIME_TYPE
-        )
-        
-        file_io = BytesIO()
-        downloader = MediaIoBaseDownload(file_io, request)
-        
-        done = False
-        while not done:
-            status, done = downloader.next_chunk()
-        
-        pdf_content = file_io.getvalue()
-        
-        # Upload to Drive folder
-        safe_name = safe_filename(filename)
-        file_metadata = {
-            'name': f'{safe_name}.pdf',
-            'parents': [output_folder_id]
-        }
-        
-        media = MediaIoBaseUpload(
-            io.BytesIO(pdf_content),
-            mimetype=config.PDF_MIME_TYPE,
-            resumable=True
-        )
-        
-        file_obj = drive_service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id'
+        pdf_content = files.export_media(
+            fileId=presentation_id, mimeType=config.PDF_MIME_TYPE
         ).execute()
-        
-        logging.info(f"Saved PDF to Drive: {file_obj['id']}")
+        if not pdf_content:
+            raise RuntimeError("Drive returned an empty PDF.")
+    except Exception as error:
+        if raise_on_failure:
+            raise RuntimeError(f"PDF export failed: {error}") from error
+        logging.error("PDF export failed: %s", error)
+        return False
+
+    file_metadata = {
+        'name': f'{safe_filename(filename)}.pdf',
+        'parents': [output_folder_id],
+    }
+    if file_id:
+        file_metadata['id'] = file_id
+        file_metadata['appProperties'] = app_properties
+
+    try:
+        media = MediaIoBaseUpload(BytesIO(pdf_content), mimetype=config.PDF_MIME_TYPE, resumable=True)
+        file_obj = files.create(
+            body=file_metadata, media_body=media, fields='id', supportsAllDrives=True
+        ).execute()
+        logging.info("Saved PDF to Drive: %s", file_obj['id'])
         return True
-    
-    except Exception as e:
-        logging.error(f"Failed to export PDF to Drive: {e}")
+    except Exception as error:
+        if raise_on_failure:
+            raise RuntimeError(f"PDF upload failed: {error}") from error
+        logging.error("PDF upload failed: %s", error)
         return False
 
 
@@ -797,7 +727,8 @@ def generate_certificates(
     template_id: str,
     output_folder: str,
     credentials_path: str = config.DEFAULT_CREDENTIALS_PATH,
-    cleanup: bool = False
+    cleanup: bool = False,
+    clear_checkpoint: bool = False,
 ) -> Dict:
     """
     Main orchestration function to generate all certificates (CLI version).
@@ -815,86 +746,102 @@ def generate_certificates(
     from utils import ensure_output_folder
     
     try:
-        # Setup
         output_folder = ensure_output_folder(output_folder)
-        slides_service, drive_service = authenticate_google(credentials_path)
-        
-        # Load and validate CSV
-        csv_rows = read_csv(csv_path)
-        
-        # Detect placeholders from template
-        detected_placeholders = detect_placeholders_in_slide(slides_service, template_id)
-        
-        # Validate CSV vs placeholders
-        is_valid, issues = validate_csv_placeholders(csv_rows, detected_placeholders)
-        if not is_valid:
-            logging.error(f"CSV validation failed: {issues}")
-            return {'total': 0, 'success': 0, 'failed': len(csv_rows), 'skipped': 0, 'errors': issues}
-        
-        # Initialize checkpoint
-        checkpoint = CheckpointManager(output_folder)
-        
-        # Main loop
-        summary = {
-            'total': len(csv_rows),
-            'success': 0,
-            'failed': 0,
-            'skipped': 0,
-            'errors': [],
-        }
-        
-        from tqdm import tqdm
-        
-        for row_idx, row in tqdm(enumerate(csv_rows), total=len(csv_rows), desc="Generating certificates"):
-            # Skip if already completed
-            if checkpoint.is_complete(row_idx):
-                summary['skipped'] += 1
-                logging.debug(f"Skipping row {row_idx}: already completed")
-                continue
-            
-            try:
-                # Get filename from first string column or use row index
-                filename = str(row.get('Name', f'certificate_{row_idx}'))
-                
-                # Duplicate template
-                temp_slide_id = duplicate_slide_template(drive_service, template_id, row_idx)
-                
-                # Prepare replacements (convert all values to strings, case-insensitive matching)
-                replacements = {}
-                for k, v in row.items():
-                    if k.lower() in detected_placeholders:
-                        replacements[k.lower()] = str(v)
-                
-                # Replace text
-                if not replace_text_in_slide(slides_service, temp_slide_id, replacements):
-                    raise Exception("Text replacement failed")
-                
-                # Export to PDF
-                if not export_slide_to_pdf(drive_service, temp_slide_id, output_folder, filename):
-                    raise Exception("PDF export failed")
-                
-                # Mark complete
-                checkpoint.mark_complete(row_idx, temp_slide_id)
-                summary['success'] += 1
-                
-            except Exception as e:
-                error_msg = f"Row {row_idx}: {str(e)}"
-                logging.error(error_msg)
-                summary['failed'] += 1
-                summary['errors'].append(error_msg)
-        
-        # Cleanup if requested
-        if cleanup:
-            cleanup_temp_slides(drive_service, checkpoint.temp_slide_ids)
-        
-        # Log summary
-        logging.info(
-            f"Certificate generation complete: "
-            f"{summary['success']} success, {summary['failed']} failed, {summary['skipped']} skipped"
-        )
-        
-        return summary
-        
+        with output_checkpoint_lock(output_folder):
+            return _generate_local_certificates(csv_path, template_id, output_folder, credentials_path, cleanup, clear_checkpoint)
+
     except Exception as e:
         logging.error(f"Fatal error in generate_certificates: {e}")
         return {'total': 0, 'success': 0, 'failed': 0, 'skipped': 0, 'errors': [str(e)]}
+
+
+def _generate_local_certificates(csv_path, template_id, output_folder, credentials_path, cleanup, clear_checkpoint):
+    slides_service, drive_service = authenticate_google(credentials_path)
+
+    # Load and validate CSV
+    csv_rows = read_csv(csv_path)
+
+    # Detect placeholders from template
+    detected_placeholders = detect_placeholders_in_slide(slides_service, template_id)
+
+    # Validate CSV vs placeholders
+    is_valid, issues = validate_csv_placeholders(csv_rows, detected_placeholders)
+    if not is_valid:
+        logging.error(f"CSV validation failed: {issues}")
+        return {'total': 0, 'success': 0, 'failed': len(csv_rows), 'skipped': 0, 'errors': issues}
+
+    template_metadata = _template_drive_metadata(drive_service, template_id)
+    checkpoint_identity = content_digest([
+        str(Path(csv_path).resolve()), csv_rows, template_id, template_metadata.get('version'),
+    ])
+    checkpoint = CheckpointManager(output_folder, checkpoint_identity)
+    if clear_checkpoint:
+        checkpoint.clear()
+
+    # Main loop
+    summary = {
+        'total': len(csv_rows),
+        'success': 0,
+        'failed': 0,
+        'skipped': 0,
+        'errors': [],
+    }
+
+    from tqdm import tqdm
+
+    for row_idx, row in tqdm(enumerate(csv_rows), total=len(csv_rows), desc="Generating certificates"):
+        # Skip if already completed
+        if checkpoint.is_complete(row_idx):
+            summary['skipped'] += 1
+            logging.debug(f"Skipping row {row_idx}: already completed")
+            continue
+
+        temp_slide_id = None
+        try:
+            filename = safe_filename(str(row.get('Name', f'certificate_{row_idx}')), max_bytes=200)
+            planned_output = checkpoint.plan_output(row_idx, filename)
+            temp_slide_id = duplicate_slide_template(
+                drive_service, template_id, row_idx, template_metadata=template_metadata
+            )
+
+            # Prepare replacements (convert all values to strings, case-insensitive matching)
+            replacements = {}
+            for k, v in row.items():
+                if k.lower() in detected_placeholders:
+                    replacements[k.lower()] = str(v)
+
+            # Replace text
+            if not replace_text_in_slide(slides_service, temp_slide_id, replacements):
+                raise Exception("Text replacement failed")
+
+            # Export to PDF
+            if not export_slide_to_pdf(
+                drive_service, temp_slide_id, output_folder, Path(planned_output).stem
+            ):
+                raise Exception("PDF export failed")
+
+            # Mark complete
+            checkpoint.mark_complete(row_idx, temp_slide_id)
+            summary['success'] += 1
+
+        except Exception as e:
+            error_msg = f"Row {row_idx}: {str(e)}"
+            logging.error(error_msg)
+            summary['failed'] += 1
+            summary['errors'].append(error_msg)
+        finally:
+            if cleanup and temp_slide_id and not checkpoint.is_complete(row_idx):
+                delete_temp_slide(drive_service.files(), temp_slide_id)
+
+    if cleanup and checkpoint.temp_slide_ids:
+        for row_key in cleanup_temp_slides(drive_service, checkpoint.temp_slide_ids):
+            del checkpoint.temp_slide_ids[row_key]
+        checkpoint.save()
+
+    # Log summary
+    logging.info(
+        f"Certificate generation complete: "
+        f"{summary['success']} success, {summary['failed']} failed, {summary['skipped']} skipped"
+    )
+
+    return summary

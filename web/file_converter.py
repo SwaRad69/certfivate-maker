@@ -3,9 +3,13 @@ File converter utility - converts various spreadsheet/data formats to CSV.
 Supports: CSV, XLSX, XLS, ODS, TSV, JSON, and more.
 """
 
+import csv
 import io
 import json
 import logging
+import re
+from datetime import date, time
+from decimal import Decimal, ROUND_HALF_UP, localcontext
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -42,10 +46,10 @@ def convert_to_csv(file_bytes, filename):
     # Route to appropriate converter
     converters = {
         'csv': _convert_csv,
-        'txt': _convert_csv,  # Plain text (tab/comma separated)
+        'txt': _convert_text,
         'tsv': _convert_tsv,  # Tab-separated values
-        'xlsx': _convert_excel,
-        'xls': _convert_excel,
+        'xlsx': _convert_xlsx,
+        'xls': _convert_xls,
         'ods': _convert_ods,  # OpenDocument Spreadsheet
         'json': _convert_json,
         'jsonl': _convert_jsonl,  # JSON Lines
@@ -64,61 +68,231 @@ def convert_to_csv(file_bytes, filename):
         raise ValueError(f"Failed to convert {filename}: {str(e)}")
 
 
-def _convert_csv(file_bytes):
-    """Handle plain CSV files."""
+def parse_rows(rows):
+    """Turn tabular values into headers and records with text-valued cells."""
+    rows = iter(rows)
+    raw_headers = next((row for row in rows if row), [])
+    values = [[_cell_text(cell) for cell in row] for row in rows if row]
+    width = max((len(row) for row in values), default=0)
+    header_names = [_cell_text(cell) for cell in raw_headers]
+    header_names.extend([''] * max(0, width - len(header_names)))
+
+    # Keep every column addressable, including blanks and duplicate headings.
+    headers = []
+    original_names = {name.casefold() for name in header_names if name}
+    used = set()
+    for index, name in enumerate(header_names):
+        base = name or f'Unnamed: {index}'
+        candidate = base
+        suffix = 1
+        while candidate.casefold() in used or (
+            candidate != name and candidate.casefold() in original_names
+        ):
+            candidate = f'{base}.{suffix}'
+            suffix += 1
+        headers.append(candidate)
+        used.add(candidate.casefold())
+
+    records = [
+        dict(zip(headers, row + [''] * (len(headers) - len(row))))
+        for row in values
+    ]
+    return headers, records
+
+
+def parse_csv(content):
+    """Read complete CSV records without numeric or missing-value inference."""
     try:
-        return file_bytes.decode('utf-8')
-    except UnicodeDecodeError:
-        # Try different encodings
-        for encoding in ['latin-1', 'cp1252', 'iso-8859-1']:
-            try:
-                return file_bytes.decode(encoding)
-            except:
-                continue
-        raise ValueError("Could not decode CSV file - unsupported encoding")
+        return parse_rows(csv.reader(io.StringIO(content.removeprefix('\ufeff'), newline=''), strict=True))
+    except csv.Error as exc:
+        raise ValueError(f"Invalid CSV format: {exc}") from exc
+
+
+def read_input_records(file_bytes, filename):
+    """Read any supported upload format as headers and text-valued records."""
+    return parse_csv(convert_to_csv(file_bytes, filename))
+
+
+def records_to_csv(headers, records):
+    """Serialize normalized records for callers using the CSV response fields."""
+    def rows():
+        yield headers
+        for record in records:
+            yield [record.get(header, '') for header in headers]
+
+    return _rows_to_csv(rows())
+
+
+def _rows_to_csv(rows):
+    output = io.StringIO(newline='')
+    csv.writer(output).writerows(rows)
+    return output.getvalue()
+
+
+def _cell_text(value):
+    return '' if value is None else str(value)
+
+
+def _convert_csv(file_bytes):
+    """Decode UTF-8, UTF-16 with a BOM, or common legacy Windows text."""
+    if file_bytes.startswith((b'\xff\xfe', b'\xfe\xff')):
+        return file_bytes.decode('utf-16')
+    for encoding in ('utf-8-sig', 'cp1252', 'latin-1'):
+        try:
+            return file_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+
+def _convert_text(file_bytes):
+    content = _convert_csv(file_bytes)
+    try:
+        dialect = csv.Sniffer().sniff(content[:4096], delimiters=',\t')
+    except csv.Error:
+        return content
+    if dialect.delimiter == '\t':
+        return _rows_to_csv(csv.reader(io.StringIO(content, newline=''), dialect))
+    return content
 
 
 def _convert_tsv(file_bytes):
     """Convert TSV (Tab-Separated Values) to CSV."""
-    try:
-        tsv_content = file_bytes.decode('utf-8')
-    except UnicodeDecodeError:
-        tsv_content = file_bytes.decode('latin-1')
-    
-    import csv
-    from io import StringIO
-    
-    # Read TSV and write as CSV
-    reader = csv.reader(StringIO(tsv_content), delimiter='\t')
-    output = StringIO()
-    writer = csv.writer(output)
-    writer.writerows(reader)
-    return output.getvalue()
+    content = io.StringIO(_convert_csv(file_bytes), newline='')
+    return _rows_to_csv(csv.reader(content, delimiter='\t', strict=True))
 
 
-def _convert_excel(file_bytes):
-    """Convert XLSX/XLS files to CSV using pandas."""
+_EXCEL_NUMBER = re.compile(
+    r'(?P<prefix>[$€£¥₹ ]*)(?P<whole>(?:#,##)?0+)(?:\.(?P<fraction>0*#*))?'
+    r'(?P<suffix> *%| *[$€£¥₹])?'
+)
+_EXCEL_DATE_TOKEN = re.compile(
+    r'AM/PM|y{4}|y{2}|m{1,4}|d{1,4}|h{1,2}|s{1,2}|"[^"]*"|\\.|[ /:.,-]+',
+    re.IGNORECASE,
+)
+
+
+def _excel_number_text(value, number_format):
+    parts = _EXCEL_NUMBER.fullmatch(number_format or '')
+    if parts is None:
+        return str(int(value)) if isinstance(value, int) or value.is_integer() else str(value)
+
+    prefix = parts['prefix']
+    whole = parts['whole']
+    fraction = parts['fraction'] or ''
+    suffix = parts['suffix'] or ''
+    number = Decimal(str(value))
+    if suffix.endswith('%'):
+        number = number.scaleb(2)
+    style = ',' if whole.startswith('#,##') else ''
+    with localcontext() as context:
+        context.rounding = ROUND_HALF_UP
+        integral, _, decimals = format(abs(number), f'{style}.{len(fraction)}f').partition('.')
+    integral = integral.zfill(whole.count('0'))
+    decimals = decimals.rstrip('0').ljust(fraction.count('0'), '0')
+    decimal_text = f'.{decimals}' if decimals else ''
+    sign = '-' if number < 0 else ''
+    return f'{sign}{prefix}{integral}{decimal_text}{suffix}'
+
+
+def _excel_date_text(value, number_format):
+    tokens = _EXCEL_DATE_TOKEN.findall(number_format or '')
+    if not tokens or ''.join(tokens) != number_format:
+        return str(value)
+    fields = [token.lower() for token in tokens]
+    hour = getattr(value, 'hour', 0)
+    hour_display = (hour % 12 or 12) if 'am/pm' in fields else hour
+    day = getattr(value, 'day', 1)
+    month = getattr(value, 'month', 1)
+    minute = getattr(value, 'minute', 0)
+    second = getattr(value, 'second', 0)
+    formats = {
+        'yyyy': '%Y', 'yy': '%y', 'mmm': '%b', 'mmmm': '%B',
+        'ddd': '%a', 'dddd': '%A', 'am/pm': '%p',
+    }
+    numbers = {'d': day, 'h': hour_display, 's': second}
+    previous_field = ''
+    result = []
+    for index, field in enumerate(fields):
+        token = tokens[index]
+        if field in formats:
+            result.append(value.strftime(formats[field]))
+        elif field[0] in numbers:
+            result.append(str(numbers[field[0]]).zfill(len(field)))
+        elif field in ('m', 'mm'):
+            following = fields[index + 1:]
+            next_field = next((item for item in following if item.isalpha()), '')
+            is_minute = previous_field in ('h', 'hh') or next_field in ('s', 'ss')
+            result.append(str(minute if is_minute else month).zfill(len(field)))
+        elif token.startswith(('"', '\\')):
+            result.append(token.strip('"') if token.startswith('"') else token[1:])
+        else:
+            result.append(token)
+        if field.isalpha():
+            previous_field = field
+    return ''.join(result)
+
+
+def _excel_cell_text(value, number_format):
+    """Use stored text and render common Excel number and date formats."""
+    if isinstance(value, bool):
+        return str(value).upper()
+    if isinstance(value, (int, float)):
+        return _excel_number_text(value, number_format)
+    if isinstance(value, (date, time)):
+        return _excel_date_text(value, number_format)
+    return _cell_text(value)
+
+
+def _excel_rows_to_csv(rows):
+    # Excel workbooks can report trailing rows solely because they are styled.
+    while rows and not any(rows[-1]):
+        rows.pop()
+    return _rows_to_csv(rows)
+
+
+def _convert_xlsx(file_bytes):
+    """Export the first worksheet using cached formula values when available."""
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
     try:
-        import pandas as pd
-    except ImportError:
-        raise ImportError("pandas is required for Excel file conversion")
-    
-    bytes_io = io.BytesIO(file_bytes)
-    
+        rows = [
+            [_excel_cell_text(cell.value, cell.number_format) for cell in row]
+            for row in workbook.worksheets[0].iter_rows()
+        ]
+    finally:
+        workbook.close()
+    return _excel_rows_to_csv(rows)
+
+
+def _convert_xls(file_bytes):
+    """Export the first worksheet of a legacy BIFF workbook."""
+    import xlrd
+
+    workbook = xlrd.open_workbook(file_contents=file_bytes, formatting_info=True)
     try:
-        # Try reading as Excel
-        df = pd.read_excel(bytes_io, sheet_name=0)  # First sheet
-    except Exception as e:
-        raise ValueError(f"Failed to read Excel file: {e}")
-    
-    # Handle empty dataframe
-    if df.empty:
-        raise ValueError("Excel file is empty or has no data")
-    
-    # Convert to CSV
-    output = io.StringIO()
-    df.to_csv(output, index=False)
-    return output.getvalue()
+        worksheet = workbook.sheet_by_index(0)
+        rows = []
+        for row_index in range(worksheet.nrows):
+            row = []
+            for cell in worksheet.row(row_index):
+                value = cell.value
+                if cell.ctype == xlrd.XL_CELL_DATE:
+                    value = xlrd.xldate_as_datetime(value, workbook.datemode)
+                elif cell.ctype == xlrd.XL_CELL_BOOLEAN:
+                    value = bool(value)
+                elif cell.ctype == xlrd.XL_CELL_ERROR:
+                    value = xlrd.error_text_from_code.get(value, '')
+                number_format = None
+                if cell.xf_index is not None:
+                    format_key = workbook.xf_list[cell.xf_index].format_key
+                    formatting = workbook.format_map.get(format_key)
+                    number_format = formatting.format_str if formatting else None
+                row.append(_excel_cell_text(value, number_format))
+            rows.append(row)
+    finally:
+        workbook.release_resources()
+    return _excel_rows_to_csv(rows)
 
 
 def _convert_ods(file_bytes):

@@ -13,6 +13,7 @@ client_secrets.json
 certificates/
 *.pdf
 .certificate_checkpoint.json
+.certificate_checkpoint.lock
 
 # Python
 __pycache__/

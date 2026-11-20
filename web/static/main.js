@@ -4,18 +4,19 @@
 let pickerApiLoaded = false;
 let pickerAuthToken = null;
 let csvFromDriveContent = null;  // Store CSV content when selected from Drive
-let selectedSheetsLoaded = false;  // Track if sheet tabs have been loaded
+let selectedSheetReady = false;
+let driveSelectionVersion = 0;
+let sheetPreviewVersion = 0;
+let templateSelectionVersion = 0;
+let templateLookupTimer;
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', function() {
-    // Load user info and initialize Picker
-    loadUserInfo();
-    
-    // Load Google Picker API
-    initializeGooglePicker();
-    
-    // Setup event listeners
+    if (!document.getElementById('generateForm')) return;
+
     setupEventListeners();
+    loadUserInfo();
+    initializeGooglePicker();
 });
 
 async function loadUserInfo() {
@@ -33,7 +34,8 @@ async function loadUserInfo() {
 }
 
 function initializeGooglePicker() {
-    // Load Google APIs library and get auth token
+    if (typeof gapi === 'undefined') return;
+
     gapi.load('picker', { 'callback': onPickerApiLoad });
     
     // Get OAuth token for Picker
@@ -76,7 +78,7 @@ function setupEventListeners() {
     const fileInput = document.getElementById('csvFile');
     if (fileInput) {
         fileInput.addEventListener('change', function() {
-            const filename = this.files[0]?.name || 'Choose CSV or Excel file';
+            const filename = this.files[0]?.name || 'Choose data file';
             const textSpan = document.querySelector('.file-input-text');
             if (textSpan) {
                 textSpan.textContent = filename;
@@ -84,132 +86,32 @@ function setupEventListeners() {
         });
     }
 
-    // Sheet selector
     const sheetSelect = document.getElementById('sheetSelect');
-    if (sheetSelect) {
-        sheetSelect.addEventListener('change', function() {
-            if (this.value) {
-                const sheetId = document.getElementById('selectedSheetId').value;
-                previewSheetData(sheetId, this.value);
-            }
-        });
-    }
+    sheetSelect.addEventListener('change', function() {
+        const sheetId = document.getElementById('selectedSheetId').value;
+        previewSheetData(sheetId, this.value);
+    });
 
-    // Test button
-    const testBtn = document.getElementById('testBtn');
-    if (testBtn) {
-        testBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            document.getElementById('testCountGroup').style.display = 'block';
-            document.getElementById('testCount').focus();
-        });
-    }
+    const templateInput = document.getElementById('templateId');
+    templateInput.addEventListener('input', function() {
+        updateTemplateSelection(templateInput.value.trim());
+    });
 
-    // Start test button
-    const startTestBtn = document.getElementById('startTestBtn');
-    if (startTestBtn) {
-        startTestBtn.addEventListener('click', async (e) => {
-            e.preventDefault();
-            const testCount = parseInt(document.getElementById('testCount').value) || 10;
-            if (testCount < 1) {
-                alert('Please enter a number greater than 0');
-                return;
-            }
-            await submitFormWithTestMode(testCount);
-        });
-    }
-
-    // Cancel test button
-    const cancelTestBtn = document.getElementById('cancelTestBtn');
-    if (cancelTestBtn) {
-        cancelTestBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            document.getElementById('testCountGroup').style.display = 'none';
-        });
-    }
-
-    // Form submission
-    const generateForm = document.getElementById('generateForm');
-    if (generateForm) {
-        generateForm.addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            // Get the actual data available, not just which tab looks active
-            const sheetId = document.getElementById('selectedSheetId').value;
-            const csvFile = document.getElementById('csvFile').files[0];
-            const templateId = document.getElementById('templateId').value.trim();
-            
-            console.log('Form submission - Available data:', { 
-                hasSheetId: !!sheetId, 
-                hasCSVFile: !!csvFile, 
-                hasTemplateId: !!templateId 
-            });
-            
-            // Validate template ID first (required in all cases)
-            if (!templateId) {
-                showError('Error', 'Please enter or select a template');
-                return;
-            }
-            if (templateId.length < 20) {
-                showError('Error', 'Template ID appears to be invalid (too short)');
-                return;
-            }
-            
-            // Determine which data source to use
-            // Priority: Google Sheet > CSV File > Error
-            if (sheetId) {
-                // User has selected a Google Sheet or Drive CSV
-                console.log('Using Google Sheets/Drive source');
-                
-                // Check if it's a CSV file from Drive
-                if (sheetId.startsWith('csv:')) {
-                    // Submit CSV from Drive
-                    console.log('Submitting CSV from Drive');
-                    if (!csvFromDriveContent) {
-                        showError('Error', 'CSV content not loaded. Please reselect the CSV file.');
-                        return;
-                    }
-                    await submitFormWithDriveCSV(csvFromDriveContent, templateId);
-                } else {
-                    // Regular Google Sheet - ensure sheets are loaded
-                    if (!selectedSheetsLoaded) {
-                        showError('Error', 'Sheet tabs are still loading. Please wait a moment and try again.');
-                        return;
-                    }
-                    
-                    const sheetName = document.getElementById('sheetSelect').value;
-                    console.log('Submitting Google Sheet:', { sheetId, sheetName });
-                    
-                    if (!sheetName) {
-                        showError('Error', 'Please select a sheet tab from the dropdown that appeared after selecting your Google Sheet.');
-                        return;
-                    }
-                    await submitFormWithSheetsId(sheetId, sheetName, templateId);
-                }
-            } else if (csvFile) {
-                // User uploaded a CSV file directly
-                console.log('Using uploaded CSV file');
-                await submitFormWithCSV(csvFile, templateId);
-            } else {
-                // No data source selected
-                showError('Error', 'Please either:\n1. Click "📊 Open Google Drive Picker" to select a Google Sheet or CSV file\n2. Click "Choose data file" to upload a CSV or Excel file');
-                return;
-            }
-        });
-    }
+    setupGenerationSubmission();
 }
 
 function openGooglePicker() {
-    // Check if API is loaded
-    if (!pickerApiLoaded) {
-        showError('Error', 'Google Picker is still loading. Please try again.');
+    if (!pickerApiLoaded || !pickerAuthToken) {
+        setDriveDataStatus('Google Picker is unavailable. Please try again.');
         return;
     }
-    
-    // Create Picker with both Spreadsheets and CSV support
+
+    const csvView = new google.picker.DocsView(google.picker.ViewId.DOCS)
+        .setMimeTypes('text/csv,application/csv,application/vnd.ms-excel');
     const picker = new google.picker.PickerBuilder()
-        .addView(google.picker.ViewId.SPREADSHEETS)  // Google Sheets
-        .addView(new google.picker.DocsUploadView())  // All files (for CSV)
+        .addView(google.picker.ViewId.SPREADSHEETS)
+        .addView(csvView)
+        .addView(new google.picker.DocsUploadView())
         .setOAuthToken(pickerAuthToken)
         .setCallback(handlePickerResponse)
         .build();
@@ -218,8 +120,7 @@ function openGooglePicker() {
 }
 
 function openSlidePicker() {
-    // Check if API is loaded
-    if (!pickerApiLoaded) {
+    if (!pickerApiLoaded || !pickerAuthToken) {
         showError('Error', 'Google Picker is still loading. Please try again.');
         return;
     }
@@ -235,617 +136,410 @@ function openSlidePicker() {
 }
 
 function handleSlidePickerResponse(data) {
-    const action = data[google.picker.Response.ACTION];
-    
-    if (action === google.picker.Action.PICKED) {
-        const doc = data[google.picker.Response.DOCUMENTS][0];
-        const slideId = doc.id;
-        const slideName = doc.name;
-        const mimeType = doc.mimeType || 'unknown';
-        
-        console.log('Slide picker selection:', { id: slideId, name: slideName, mimeType: mimeType });
-        
-        // Validate it's a presentation
-        if (!mimeType.includes('presentation')) {
-            showError('Error', `Selected file is not a Google Slide (${mimeType}). Please select a Google Slides presentation.`);
-            return;
-        }
-        
-        // Set the template ID and display name
-        document.getElementById('templateId').value = slideId;
-        document.getElementById('selectedTemplateName').textContent = `✓ ${slideName}`;
-        
-        // Detect placeholders in the template
-        detectTemplatePlaceholders(slideId);
-        
-        console.log('Template selected:', slideName);
-    } else if (action === google.picker.Action.CANCEL) {
-        console.log('Slide picker cancelled');
+    if (data[google.picker.Response.ACTION] !== google.picker.Action.PICKED) return;
+
+    const doc = data[google.picker.Response.DOCUMENTS][0];
+    if (doc.mimeType !== 'application/vnd.google-apps.presentation') {
+        showError('Error', 'Please select a Google Slides presentation.');
+        return;
+    }
+
+    document.getElementById('templateId').value = doc.id;
+    updateTemplateSelection(doc.id, doc.name);
+}
+
+function updateTemplateSelection(templateId, templateName = '') {
+    const version = ++templateSelectionVersion;
+    const container = document.getElementById('filenamePlaceholderSelector');
+    const filenameField = document.getElementById('filenameField');
+    const selectedTemplateName = document.getElementById('selectedTemplateName');
+
+    if (container.dataset.templateId !== templateId) {
+        container.hidden = true;
+        filenameField.options.length = 1;
+        filenameField.value = '';
+        container.dataset.templateId = templateId;
+    }
+    selectedTemplateName.textContent = templateName ? ('? ' + templateName) : 'Click to browse...';
+    clearTimeout(templateLookupTimer);
+    if (/^[a-zA-Z0-9_-]{20,}$/.test(templateId)) {
+        templateLookupTimer = setTimeout(() => detectTemplatePlaceholders(templateId, version), 250);
     }
 }
 
-async function detectTemplatePlaceholders(templateId) {
+async function detectTemplatePlaceholders(templateId, version) {
     try {
-        console.log('Detecting placeholders in template:', templateId);
-        
         const response = await fetch('/api/template/placeholders', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ template_id: templateId })
         });
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.warn('Could not detect placeholders:', errorData.error);
-            // Don't show error to user - this is optional functionality
-            // Just use default behavior
-            return;
-        }
-        
+        if (!response.ok || version !== templateSelectionVersion) return;
+
         const data = await response.json();
-        const placeholders = data.placeholders || [];
-        
-        console.log('Detected placeholders:', placeholders);
-        
-        // Show placeholder selector if we found any
-        if (placeholders.length > 0) {
-            showFilenamePlaceholderSelector(placeholders);
+        if (version !== templateSelectionVersion ||
+            document.getElementById('templateId').value.trim() !== templateId) return;
+
+        const container = document.getElementById('filenamePlaceholderSelector');
+        const select = document.getElementById('filenameField');
+        const previousValue = container.hidden ? data.placeholders?.[0] : select.value;
+        select.options.length = 1;
+        for (const placeholder of data.placeholders || []) {
+            const option = document.createElement('option');
+            option.value = placeholder;
+            option.textContent = placeholder;
+            select.appendChild(option);
         }
+        select.value = previousValue ?? '';
+        container.hidden = select.options.length === 1;
     } catch (error) {
         console.error('Error detecting placeholders:', error);
-        // Don't show error to user - this is optional functionality
-    }
-}
-
-function showFilenamePlaceholderSelector(placeholders) {
-    // Create or get the filename field selector container
-    let selectorContainer = document.getElementById('filenamePlaceholderSelector');
-    
-    if (!selectorContainer) {
-        // Create the container if it doesn't exist
-        // Insert it right before the output folder form group
-        const outputFolderGroup = document.querySelector('label[for="outputFolder"]')?.closest('.form-group');
-        if (outputFolderGroup && outputFolderGroup.parentElement) {
-            selectorContainer = document.createElement('div');
-            selectorContainer.id = 'filenamePlaceholderSelector';
-            selectorContainer.className = 'form-group';
-            outputFolderGroup.parentElement.insertBefore(selectorContainer, outputFolderGroup);
-        } else {
-            // Fallback: create it but don't insert (it will show an error)
-            console.error('Could not find output folder element to insert placeholder selector');
-            return;
-        }
-    }
-    
-    // Build the selector HTML
-    let selectOptions = '';
-    placeholders.forEach(placeholder => {
-        selectOptions += `<option value="${placeholder}">${placeholder}</option>`;
-    });
-    
-    selectorContainer.innerHTML = `
-        <label for="filenameField" class="label">📄 Certificate Filename Field</label>
-        <select id="filenameField" name="filename_field" class="input">
-            <option value="">-- Select field to use for filenames --</option>
-            ${selectOptions}
-        </select>
-        <small>Choose which field from your data will be used to name the generated certificates. If not selected, the system will use the "Name" field from your data.</small>
-    `;
-    
-    // Select first placeholder by default
-    if (placeholders.length > 0) {
-        document.getElementById('filenameField').value = placeholders[0];
     }
 }
 
 function handlePickerResponse(data) {
-    const action = data[google.picker.Response.ACTION];
-    
-    if (action === google.picker.Action.PICKED) {
-        const doc = data[google.picker.Response.DOCUMENTS][0];
-        const fileId = doc.id;
-        const fileName = doc.name;
-        const mimeType = doc.mimeType || 'unknown';
-        
-        console.log('Picker selection:', { id: fileId, name: fileName, mimeType: mimeType });
-        
-        // Ensure sheets tab is active
-        switchTab('sheets');
-        
-        // Check if it's a CSV file
-        if (mimeType === 'text/csv' || fileName.endsWith('.csv')) {
-            // Handle CSV file - download and use directly
-            downloadAndUseCsvFile(fileId, fileName);
-            return;
-        }
-        
-        // Check if it's a Google Sheet
-        if (!mimeType.includes('spreadsheet')) {
-            showError('Error', `Selected file is not supported (${mimeType}). Please select either a Google Sheet or a CSV file.`);
-            return;
-        }
-        
-        // It's a Google Sheet - load sheet tabs
-        document.getElementById('selectedSheetId').value = fileId;
-        document.getElementById('selectedSheetName').textContent = `✓ ${fileName}`;
-        loadSheetTabs(fileId);
-    } else if (action === google.picker.Action.CANCEL) {
-        console.log('Picker cancelled');
+    if (data[google.picker.Response.ACTION] !== google.picker.Action.PICKED) return;
+
+    const doc = data[google.picker.Response.DOCUMENTS][0];
+    const isCsv = doc.mimeType === 'text/csv' || doc.mimeType === 'application/csv' ||
+        /[.]csv$/i.test(doc.name);
+    const isSheet = doc.mimeType === 'application/vnd.google-apps.spreadsheet';
+    const version = ++driveSelectionVersion;
+    ++sheetPreviewVersion;
+    selectedSheetReady = false;
+    csvFromDriveContent = null;
+    const selectedId = document.getElementById('selectedSheetId');
+    const selectedName = document.getElementById('selectedSheetName');
+    selectedId.value = '';
+    selectedName.textContent = 'Click to browse...';
+    document.getElementById('sheetSelect').replaceChildren();
+    document.getElementById('sheetTabsGroup').style.display = 'none';
+    clearDataPreview();
+    switchTab('sheets');
+
+    if (!isCsv && !isSheet) {
+        setDriveDataStatus('Please select a Google Sheet or a CSV file.');
+        return;
     }
+    selectedId.value = isCsv ? ('csv:' + doc.id) : doc.id;
+    selectedName.textContent = doc.name + (isCsv ? ' (CSV)' : '');
+
+    if (isCsv) {
+        return downloadAndUseCsvFile(doc.id, version);
+    }
+    return loadSheetTabs(doc.id, version);
 }
 
-async function downloadAndUseCsvFile(fileId, fileName) {
+function setDriveDataStatus(message) {
+    document.getElementById('driveDataStatus').textContent = message;
+}
+
+function clearDataPreview() {
+    document.getElementById('previewContainer').style.display = 'none';
+    document.getElementById('previewHead').replaceChildren();
+    document.getElementById('previewBody').replaceChildren();
+    document.getElementById('rowCount').textContent = '';
+}
+
+async function downloadAndUseCsvFile(fileId, version) {
+    setDriveDataStatus('Loading CSV preview...');
     try {
-        console.log('Downloading CSV file:', fileName);
-        
-        // Use Google Drive API to export file as CSV
-        const response = await fetch(`/api/drive/file/${fileId}/csv`, {
-            method: 'GET'
-        });
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            showError('Error', errorData.error || 'Failed to download CSV file');
-            return;
-        }
-        
+        const response = await fetch('/api/drive/file/' + encodeURIComponent(fileId) + '/csv');
         const data = await response.json();
-        
-        // Store CSV content for form submission
-        csvFromDriveContent = data.csv_content;
-        
-        // Show file info and populate CSV content
-        document.getElementById('selectedSheetId').value = `csv:${fileId}`;  // Mark as CSV
-        document.getElementById('selectedSheetName').textContent = `✓ ${fileName} (CSV)`;
-        
-        // Show preview
-        populateCsvPreview(data.csv_content, data.rows_count);
-        
-        // Show sheet tabs group as info
-        const sheetTabsGroup = document.getElementById('sheetTabsGroup');
-        sheetTabsGroup.innerHTML = `<div class="form-group"><small>CSV file selected: ${data.rows_count} data rows</small></div>`;
-        sheetTabsGroup.style.display = 'block';
-        
-        // Show preview container
-        showCsvPreview(data.csv_content);
-        
+        if (version !== driveSelectionVersion) return;
+        if (!response.ok) throw new Error(data.error || 'Could not load CSV data.');
+
+        displayPreview(data.headers, data.rows, data.rows_count);
+        if (data.rows_count > 0) {
+            csvFromDriveContent = data.csv_content;
+            setDriveDataStatus('');
+        } else {
+            setDriveDataStatus('This CSV has no data rows.');
+        }
     } catch (error) {
-        console.error('Error downloading CSV file:', error);
-        showError('Error', 'Failed to download CSV file. Check your internet connection.');
+        if (version === driveSelectionVersion) setDriveDataStatus(error.message);
     }
 }
 
-function populateCsvPreview(csvContent, rowCount) {
-    console.log(`CSV preview: ${rowCount} rows`);
-}
-
-function showCsvPreview(csvContent) {
-    // Parse CSV and show preview
-    const lines = csvContent.trim().split('\n').slice(0, 6);  // First 5 rows + header
-    const rows = lines.map(line => {
-        // Simple CSV parsing (handles basic cases)
-        return line.split(',').map(cell => cell.trim());
-    });
-    
-    const previewContainer = document.getElementById('previewContainer');
-    const previewHead = document.getElementById('previewHead');
-    const previewBody = document.getElementById('previewBody');
-    const rowCount = document.getElementById('rowCount');
-    
-    // Clear existing
-    previewHead.innerHTML = '';
-    previewBody.innerHTML = '';
-    
-    if (rows.length > 0) {
-        // Header row
-        const headerRow = document.createElement('tr');
-        rows[0].forEach(cell => {
-            const th = document.createElement('th');
-            th.textContent = cell;
-            headerRow.appendChild(th);
-        });
-        previewHead.appendChild(headerRow);
-        
-        // Data rows
-        rows.slice(1).forEach(row => {
-            const tr = document.createElement('tr');
-            row.forEach(cell => {
-                const td = document.createElement('td');
-                td.textContent = cell;
-                tr.appendChild(td);
-            });
-            previewBody.appendChild(tr);
-        });
-    }
-    
-    previewContainer.style.display = 'block';
-}
-
-async function loadSheetTabs(sheetId) {
+async function loadSheetTabs(sheetId, version) {
+    setDriveDataStatus('Loading spreadsheet tabs...');
     try {
-        console.log('Loading sheet tabs for ID:', sheetId);
-        
-        if (!sheetId || sheetId.length < 20) {
-            showError('Error', 'Invalid spreadsheet ID format');
-            return;
-        }
-        
-        const response = await fetch(`/api/drive/sheets/${sheetId}/names`);
-        
-        if (!response.ok) {
-            const errorData = await response.json();
-            const errorMsg = errorData.error || `HTTP ${response.status}`;
-            showError('Error', errorMsg);
-            return;
-        }
-        
+        const response = await fetch('/api/drive/sheets/' + encodeURIComponent(sheetId) + '/names');
         const data = await response.json();
-        populateDriveSheetTabs(data.sheets);
-    } catch (error) {
-        console.error('Error loading sheet tabs:', error);
-        showError('Error', 'Failed to load sheet tabs. Check your internet connection and try again.');
-    }
-}
+        if (version !== driveSelectionVersion) return;
+        if (!response.ok) throw new Error(data.error || 'Could not load spreadsheet tabs.');
+        if (!data.sheets.length) throw new Error('Spreadsheet has no tabs.');
 
-function populateDriveSheetTabs(sheets) {
-    const select = document.getElementById('sheetSelect');
-    select.innerHTML = '';
-    
-    sheets.forEach(sheet => {
-        const option = document.createElement('option');
-        option.value = sheet.properties.title;
-        option.textContent = sheet.properties.title;
-        select.appendChild(option);
-    });
-    
-    // Show the sheet tabs selector
-    document.getElementById('sheetTabsGroup').style.display = 'block';
-    
-    // Auto-select first sheet if available
-    if (sheets.length > 0) {
+        const select = document.getElementById('sheetSelect');
+        for (const sheet of data.sheets) {
+            const option = document.createElement('option');
+            option.value = sheet.properties.title;
+            option.textContent = sheet.properties.title;
+            select.appendChild(option);
+        }
         select.selectedIndex = 0;
-        selectedSheetsLoaded = true;  // Mark sheets as loaded
-        const firstSheet = sheets[0].properties.title;
-        const sheetId = document.getElementById('selectedSheetId').value;
-        previewSheetData(sheetId, firstSheet);
-    } else {
-        selectedSheetsLoaded = false;
+        document.getElementById('sheetTabsGroup').style.display = 'block';
+        return previewSheetData(sheetId, select.value);
+    } catch (error) {
+        if (version === driveSelectionVersion) setDriveDataStatus(error.message);
     }
 }
 
 async function previewSheetData(sheetId, sheetName) {
+    const version = ++sheetPreviewVersion;
+    selectedSheetReady = false;
+    clearDataPreview();
+    setDriveDataStatus('');
+    if (!sheetId || !sheetName) return;
+
+    setDriveDataStatus('Loading sheet preview...');
     try {
-        // Use the Google Sheets API via preview endpoint
-        const response = await fetch('/api/sheets/list', {
+        const response = await fetch('/api/sheets/preview', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ 
-                sheets_url: `https://docs.google.com/spreadsheets/d/${sheetId}/`,
-                sheet_name: sheetName,
-                rows: 5
-            })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sheets_id: sheetId, sheet_name: sheetName, rows: 5 })
         });
-        
-        if (!response.ok) {
-            console.error('Error loading preview');
-            return;
-        }
-        
         const data = await response.json();
+        if (version !== sheetPreviewVersion) return;
+        if (!response.ok) throw new Error(data.error || 'Could not load sheet data.');
+
         displayPreview(data.headers, data.rows, data.total_rows);
+        selectedSheetReady = data.total_rows > 0;
+        setDriveDataStatus(selectedSheetReady ? '' : 'This tab has no data rows.');
     } catch (error) {
-        console.error('Error previewing sheet:', error);
+        if (version === sheetPreviewVersion) setDriveDataStatus(error.message);
     }
 }
 
 function switchTab(tabName) {
-    // Hide all tabs
     document.querySelectorAll('.tab-content').forEach(tab => {
-        tab.classList.remove('active');
+        tab.classList.toggle('active', tab.id === tabName + '-tab');
     });
-    
-    // Remove active from all buttons
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.classList.remove('active');
+    document.querySelectorAll('.tab-btn').forEach(button => {
+        button.classList.toggle('active', button.dataset.tab === tabName);
     });
-    
-    // Show selected tab
-    document.getElementById(tabName + '-tab').classList.add('active');
-    
-    // Mark button as active
-    document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
-}
-
-function populateSheetSelector(sheets) {
-    const select = document.getElementById('sheetSelect');
-    select.innerHTML = '';
-    
-    sheets.forEach(sheet => {
-        const option = document.createElement('option');
-        option.value = sheet.properties.title;
-        option.textContent = sheet.properties.title;
-        select.appendChild(option);
-    });
-    
-    // Auto-select first sheet if available
-    if (sheets.length > 0) {
-        select.selectedIndex = 0;
-        const firstSheet = sheets[0].properties.title;
-        const sheetsUrl = document.getElementById('sheetsUrl').value;
-        previewSheetData(sheetsUrl, firstSheet);
-    }
-}
-
-async function previewSheetData(sheetsUrl, sheetName) {
-    try {
-        const response = await fetch('/api/sheets/preview', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ 
-                sheets_url: sheetsUrl,
-                sheet_name: sheetName,
-                rows: 5
-            })
-        });
-        
-        if (!response.ok) {
-            console.error('Error loading preview');
-            return;
-        }
-        
-        const data = await response.json();
-        displayPreview(data.headers, data.rows, data.total_rows);
-    } catch (error) {
-        console.error('Error previewing sheet:', error);
-    }
 }
 
 function displayPreview(headers, rows, totalRows) {
-    const previewDiv = document.getElementById('previewContainer');
     const thead = document.getElementById('previewHead');
     const tbody = document.getElementById('previewBody');
-    const rowCount = document.getElementById('rowCount');
-    
-    // Create header
-    thead.innerHTML = '<tr>' + headers.map(h => `<th>${h}</th>`).join('') + '</tr>';
-    
-    // Create body rows
-    tbody.innerHTML = rows.map(row => {
-        return '<tr>' + row.map(cell => `<td>${cell || '-'}</td>`).join('') + '</tr>';
-    }).join('');
-    
-    rowCount.textContent = `Total rows: ${totalRows}`;
-    previewDiv.style.display = 'block';
+    const headerRow = thead.insertRow();
+    for (const header of headers) {
+        const cell = document.createElement('th');
+        cell.scope = 'col';
+        cell.textContent = header ?? '';
+        headerRow.appendChild(cell);
+    }
+    for (const row of rows) {
+        const tableRow = tbody.insertRow();
+        for (const value of row) {
+            tableRow.insertCell().textContent = value ?? '';
+        }
+    }
+
+    document.getElementById('rowCount').textContent = 'Showing ' + rows.length + ' of ' + totalRows + ' data rows';
+    document.getElementById('previewContainer').style.display = 'block';
 }
 
-// Submit form with test mode
-async function submitFormWithTestMode(testCount) {
-    const sheetId = document.getElementById('selectedSheetId').value;
-    const csvFile = document.getElementById('csvFile').files[0];
-    const templateId = document.getElementById('templateId').value.trim();
-    const testCountValue = testCount || parseInt(document.getElementById('testCount').value) || 10;
+const batchStoragePrefix = 'certificate-generator.batch.';
+const pendingBatches = new Map();
+let generationRequestActive = false;
 
-    // Validate template ID first
-    if (!templateId) {
-        showError('Error', 'Please enter or select a template');
-        return;
-    }
-    if (templateId.length < 20) {
-        showError('Error', 'Template ID appears to be invalid (too short)');
-        return;
-    }
+function setupGenerationSubmission() {
+    const form = document.getElementById('generateForm');
+    if (!form) return;
 
-    // Determine which data source to use
-    if (sheetId) {
-        if (sheetId.startsWith('csv:')) {
-            if (!csvFromDriveContent) {
-                showError('Error', 'CSV content not loaded. Please reselect the CSV file.');
-                return;
+    try {
+        for (let index = 0; index < localStorage.length; index++) {
+            const key = localStorage.key(index);
+            if (key?.startsWith(batchStoragePrefix)) {
+                const batch = JSON.parse(localStorage.getItem(key));
+                if (batch?.id) pendingBatches.set(batch.id, batch);
             }
-            await submitFormWithDriveCSV(csvFromDriveContent, templateId, true, testCountValue);
+        }
+    } catch {
+        // The current page can still resume a batch if browser storage is unavailable.
+    }
+    updateBatchRecovery();
+
+    form.addEventListener('submit', event => {
+        event.preventDefault();
+        return submitGeneration({ testMode: event.submitter?.id === 'startTestBtn' });
+    });
+    document.getElementById('testBtn').addEventListener('click', () => {
+        document.getElementById('testCountGroup').style.display = 'block';
+        document.getElementById('testCount').focus();
+    });
+    document.getElementById('cancelTestBtn').addEventListener('click', () => {
+        document.getElementById('testCountGroup').style.display = 'none';
+    });
+    document.getElementById('resumeBatchBtn').addEventListener('click', () => submitGeneration({ resume: true }));
+    document.getElementById('checkBatchBtn').addEventListener('click', checkBatchStatus);
+}
+
+function buildGenerationPayload(testCount) {
+    const templateId = document.getElementById('templateId').value.trim();
+    if (!templateId) throw new Error('Enter or select a Google Slides template.');
+    if (!/^[A-Za-z0-9_-]{20,}$/.test(templateId)) {
+        throw new Error('Enter a valid template ID from the Google Slides URL.');
+    }
+
+    const data = new FormData();
+    if (document.getElementById('csv-tab').classList.contains('active')) {
+        const fileInput = document.getElementById('csvFile');
+        const file = fileInput.files[0];
+        if (!file) throw new Error('Choose a data file to upload.');
+        if (!file.size) throw new Error('The selected data file is empty.');
+        if (!fileInput.accept.split(',').some(extension => file.name.toLowerCase().endsWith(extension))) {
+            throw new Error('Choose one of the supported data file formats.');
+        }
+        data.append('csv_file', file);
+    } else if (document.getElementById('sheets-tab').classList.contains('active')) {
+        const driveId = document.getElementById('selectedSheetId').value;
+        if (!driveId) throw new Error('Select a spreadsheet or CSV file from Google Drive.');
+
+        if (driveId.startsWith('csv:')) {
+            if (!csvFromDriveContent?.trim()) {
+                throw new Error('The Drive CSV is empty or still loading. Wait for the preview or select another file.');
+            }
+            data.append('csv_file', new Blob([csvFromDriveContent], { type: 'text/csv' }), 'data.csv');
         } else {
-            if (!selectedSheetsLoaded) {
-                showError('Error', 'Sheet tabs are still loading. Please wait a moment and try again.');
-                return;
+            if (!selectedSheetReady) {
+                throw new Error('Wait for the sheet preview and choose a tab with data rows.');
             }
             const sheetName = document.getElementById('sheetSelect').value;
-            if (!sheetName) {
-                showError('Error', 'Please select a sheet tab from the dropdown.');
-                return;
-            }
-            await submitFormWithSheetsId(sheetId, sheetName, templateId, true, testCountValue);
+            if (!sheetName) throw new Error('Select a tab from the spreadsheet.');
+            data.append('sheets_id', driveId);
+            data.append('sheet_name', sheetName);
         }
-    } else if (csvFile) {
-        await submitFormWithCSV(csvFile, templateId, true, testCountValue);
     } else {
-        showError('Error', 'Please either select a Google Sheet/CSV file or upload a CSV file');
-        return;
+        throw new Error('Select a data source.');
+    }
+
+    data.append('template_id', templateId);
+    const outputFolder = document.getElementById('outputFolder').value.trim() || 'Certificate Generator';
+    data.append('output_folder', outputFolder);
+    const filenameField = document.getElementById('filenameField')?.value;
+    if (filenameField) data.append('filename_field', filenameField);
+
+    if (testCount !== null) {
+        const input = document.getElementById('testCount');
+        if (!Number.isInteger(testCount) || testCount < Number(input.min) || testCount > Number(input.max)) {
+            throw new Error(`Enter a whole number from ${input.min} to ${input.max} for First N.`);
+        }
+        data.append('test_mode', 'true');
+        data.append('test_count', testCount);
+    }
+    return data;
+}
+
+function updateBatchRecovery(selectedId) {
+    const select = document.getElementById('recoveryBatchSelect');
+    const previous = selectedId || select.value;
+    select.replaceChildren();
+    for (const batch of [...pendingBatches.values()].sort((a, b) => b.startedAt - a.startedAt)) {
+        const option = document.createElement('option');
+        option.value = batch.id;
+        const action = batch.testCount === null ? 'Generate' : `First ${batch.testCount}`;
+        option.textContent = `${action} · ${new Date(batch.startedAt).toLocaleString()} · ${batch.id.slice(-6)}`;
+        select.appendChild(option);
+    }
+    if (pendingBatches.has(previous)) select.value = previous;
+    document.getElementById('batchRecovery').hidden = pendingBatches.size === 0;
+}
+
+function rememberBatch(batch) {
+    pendingBatches.set(batch.id, batch);
+    try {
+        const { id, testCount, startedAt } = batch;
+        localStorage.setItem(batchStoragePrefix + id, JSON.stringify({ id, testCount, startedAt }));
+    } catch {
+        // Keep the batch available for recovery on the current page.
+    }
+    updateBatchRecovery(batch.id);
+}
+
+function clearBatch(batch) {
+    pendingBatches.delete(batch.id);
+    try {
+        localStorage.removeItem(batchStoragePrefix + batch.id);
+    } catch {
+        // The current page can still clear the batch.
+    }
+    updateBatchRecovery();
+}
+
+function selectedRecoveryBatch() {
+    return pendingBatches.get(document.getElementById('recoveryBatchSelect').value);
+}
+
+async function runGenerationAction(message, request) {
+    if (generationRequestActive) return;
+    generationRequestActive = true;
+    const buttons = ['generateBtn', 'testBtn', 'startTestBtn', 'resumeBatchBtn', 'checkBatchBtn']
+        .map(id => document.getElementById(id));
+    buttons.forEach(button => { button.disabled = true; });
+    document.getElementById('resultContainer').style.display = 'none';
+    showLoading(message);
+    try {
+        await request();
+    } catch (error) {
+        showError('Error', error.message || 'Request failed.');
+    } finally {
+        hideLoading();
+        buttons.forEach(button => { button.disabled = false; });
+        generationRequestActive = false;
     }
 }
 
-// Submit form with CSV content from Google Drive
-async function submitFormWithDriveCSV(csvContent, templateId, testMode = false, testCount = 10) {
-    try {
-        const message = testMode ? `Testing with first ${testCount} certificates...` : 'Generating certificates from CSV file...';
-        showLoading(message);
-        
-        // Create a Blob from CSV content and convert to File object
-        const csvBlob = new Blob([csvContent], { type: 'text/csv' });
-        const csvFile = new File([csvBlob], 'data.csv', { type: 'text/csv' });
-        
-        const formData = new FormData();
-        formData.append('csv_file', csvFile);
-        formData.append('template_id', templateId);
-        formData.append('output_folder', document.getElementById('outputFolder')?.value || 'Certificate Generator');
-        
-        // Add test mode parameters if needed
-        if (testMode) {
-            formData.append('test_mode', 'true');
-            formData.append('test_count', testCount);
+function submitGeneration({ testMode = false, resume = false } = {}) {
+    const message = resume ? 'Resuming certificate generation...' : 'Generating certificates...';
+    return runGenerationAction(message, async () => {
+        const batch = resume ? selectedRecoveryBatch() : null;
+        if (resume && !batch) return;
+        const testCount = batch ? batch.testCount : testMode ? Number(document.getElementById('testCount').value) : null;
+        const data = batch?.data || buildGenerationPayload(testCount);
+        let batchId = batch?.id;
+        if (!batchId) {
+            const response = await fetch('/api/generation-batches/new', { cache: 'no-store' });
+            const reservation = await response.json();
+            if (!response.ok || !reservation.batch_id) {
+                throw new Error(reservation.error || 'Could not start a generation batch.');
+            }
+            batchId = reservation.batch_id;
         }
-        
-        // Include filename field if selected
-        const filenameField = document.getElementById('filenameField')?.value;
-        if (filenameField) {
-            formData.append('filename_field', filenameField);
-        }
-        
-        const response = await fetch('/api/generate', {
-            method: 'POST',
-            body: formData
-        });
-        
-        hideLoading();
-        
-        if (!response.ok) {
-            const error = await response.json();
-            showError('Error', error.error || 'Failed to generate certificates');
-            return;
-        }
-        
+
+        data.set('batch_id', batchId);
+        if (resume) data.set('retry_failed', 'true');
+        const savedBatch = { id: batchId, testCount, data, startedAt: batch?.startedAt ?? Date.now() };
+        rememberBatch(savedBatch);
+        const response = await fetch('/api/generate', { method: 'POST', body: data });
         const result = await response.json();
-        const folderName = testMode ? 'Certificate Generator (TEST)' : document.getElementById('outputFolder')?.value || 'Certificate Generator';
-        showSuccess('Success', result.message, `
-            <p><strong>Results:</strong></p>
-            <ul>
-                <li>Generated: ${result.summary.success || 0}</li>
-                <li>Failed: ${result.summary.failed || 0}</li>
-                <li>Duration: ${result.summary.duration || 'N/A'}s</li>
-            </ul>
-            <p>Certificates saved to your Google Drive in "${folderName}"!</p>
-        `);
-        
-        // Hide test count group after success
-        if (testMode) {
+        const outputFolder = data.get('output_folder') + (testCount === null ? '' : ' (TEST)');
+        renderGenerationResult(result, outputFolder);
+
+        if ((result.status === 'completed' && !result.summary?.cleanup_pending) ||
+            (!resume && result.status === 'invalid_request')) {
+            clearBatch(savedBatch);
+        }
+        if (result.status === 'completed' && testCount !== null) {
             document.getElementById('testCountGroup').style.display = 'none';
         }
-    } catch (error) {
-        hideLoading();
-        showError('Error', error.message || 'Request failed');
-    }
+    });
 }
 
-// Submit form with CSV file
-async function submitFormWithCSV(csvFile, templateId, testMode = false, testCount = 10) {
-    try {
-        const message = testMode ? `Testing with first ${testCount} certificates...` : 'Generating certificates...';
-        showLoading(message);
-        
-        const formData = new FormData();
-        formData.append('csv_file', csvFile);
-        formData.append('template_id', templateId);
-        formData.append('output_folder', document.getElementById('outputFolder')?.value || 'Certificate Generator');
-        
-        // Add test mode parameters if needed
-        if (testMode) {
-            formData.append('test_mode', 'true');
-            formData.append('test_count', testCount);
+function checkBatchStatus() {
+    return runGenerationAction('Checking generation status...', async () => {
+        const batch = selectedRecoveryBatch();
+        if (!batch) return;
+        const response = await fetch(`/api/generation-batches/${encodeURIComponent(batch.id)}`, { cache: 'no-store' });
+        if (response.status === 404) {
+            throw new Error('The batch has no saved progress yet. Resume the batch to try again.');
         }
-        
-        // Include filename field if selected
-        const filenameField = document.getElementById('filenameField')?.value;
-        if (filenameField) {
-            formData.append('filename_field', filenameField);
-        }
-        
-        const response = await fetch('/api/generate', {
-            method: 'POST',
-            body: formData
-        });
-        
-        hideLoading();
-        
-        if (!response.ok) {
-            const error = await response.json();
-            showError('Error', error.error || 'Failed to generate certificates');
-            return;
-        }
-        
         const result = await response.json();
-        const folderName = testMode ? 'Certificate Generator (TEST)' : document.getElementById('outputFolder')?.value || 'Certificate Generator';
-        showSuccess('Success', result.message, `
-            <p><strong>Results:</strong></p>
-            <ul>
-                <li>Generated: ${result.summary.success || 0}</li>
-                <li>Failed: ${result.summary.failed || 0}</li>
-                <li>Duration: ${result.summary.duration || 'N/A'}s</li>
-            </ul>
-            <p>Certificates saved to your Google Drive in "${folderName}"!</p>
-        `);
-        
-        // Hide test count group after success
-        if (testMode) {
-            document.getElementById('testCountGroup').style.display = 'none';
-        }
-    } catch (error) {
-        hideLoading();
-        showError('Error', error.message || 'Request failed');
-    }
-}
-
-// Submit form with Google Sheets (using Sheet ID)
-async function submitFormWithSheetsId(sheetId, sheetName, templateId, testMode = false, testCount = 10) {
-    try {
-        const message = testMode ? `Testing with first ${testCount} certificates...` : 'Generating certificates from Google Sheets...';
-        showLoading(message);
-        
-        const formData = new FormData();
-        formData.append('sheets_id', sheetId);
-        formData.append('sheet_name', sheetName);
-        formData.append('template_id', templateId);
-        formData.append('output_folder', document.getElementById('outputFolder')?.value || 'Certificate Generator');
-        
-        // Add test mode parameters if needed
-        if (testMode) {
-            formData.append('test_mode', 'true');
-            formData.append('test_count', testCount);
-        }
-        
-        // Include filename field if selected
-        const filenameField = document.getElementById('filenameField')?.value;
-        if (filenameField) {
-            formData.append('filename_field', filenameField);
-        }
-        
-        const response = await fetch('/api/generate', {
-            method: 'POST',
-            body: formData
-        });
-        
-        hideLoading();
-        
-        if (!response.ok) {
-            const error = await response.json();
-            showError('Error', error.error || 'Failed to generate certificates');
-            return;
-        }
-        
-        const result = await response.json();
-        const folderName = testMode ? 'Certificate Generator (TEST)' : document.getElementById('outputFolder')?.value || 'Certificate Generator';
-        showSuccess('Success', result.message, `
-            <p><strong>Results:</strong></p>
-            <ul>
-                <li>Generated: ${result.summary.success || 0}</li>
-                <li>Failed: ${result.summary.failed || 0}</li>
-                <li>Duration: ${result.summary.duration || 'N/A'}s</li>
-            </ul>
-            <p>Certificates saved to your Google Drive in "${folderName}"!</p>
-        `);
-        
-        // Hide test count group after success
-        if (testMode) {
-            document.getElementById('testCountGroup').style.display = 'none';
-        }
-    } catch (error) {
-        hideLoading();
-        showError('Error', error.message || 'Request failed');
-    }
+        renderGenerationResult(result);
+        if (result.status === 'completed' && !result.summary?.cleanup_pending) clearBatch(batch);
+    });
 }
 
 // Show loading state
@@ -869,57 +563,83 @@ function hideLoading() {
 }
 
 // Show success message
-function showSuccess(title, message, details) {
-    const container = document.getElementById('resultContainer');
-    const successDiv = document.getElementById('successResult');
-    const successMsg = document.getElementById('successMessage');
-    const successDetails = document.getElementById('successDetails');
-    
-    if (successMsg) successMsg.textContent = message;
-    if (successDetails) successDetails.innerHTML = details;
-    
-    if (container) container.style.display = 'block';
-    if (successDiv) successDiv.style.display = 'block';
-    
-    document.getElementById('errorResult').style.display = 'none';
+function renderGenerationResult(result, outputFolder) {
+    const summary = result.summary || {};
+    const created = summary.created_pdfs ?? summary.success ?? 0;
+    const failed = summary.failed_rows ?? summary.failed ?? 0;
+    const successful = summary.successful_rows ?? summary.success ?? 0;
+    const status = result.status || (created > 0 ? (failed ? 'partial' : 'completed') : 'failed');
+    const presentations = {
+        completed: ['Generation complete', 'success'],
+        partial: ['Generation partially complete', 'partial'],
+        pending: ['Generation pending', 'pending'],
+        invalid_request: ['Invalid generation request', 'error'],
+        failed: ['Generation failed', 'error'],
+    };
+    const [title, appearance] = presentations[status] || presentations.failed;
+    const details = [];
+    if (result.summary) {
+        details.push(
+            ['Input rows', summary.input_rows ?? summary.total ?? 0],
+            ['Attempted rows', summary.attempted_rows ?? successful + failed],
+            ['Successful rows', successful],
+            ['Failed rows', failed],
+            ['Created PDFs', created]
+        );
+        if (summary.pending_rows) {
+            details.push(['Pending rows', summary.pending_rows]);
+        }
+        if (summary.cleanup_pending) {
+            details.push(['Temporary Slides', 'Cleanup is pending. Check batch status again to retry.']);
+        }
+    }
+
+    const folder = result.output_folder || outputFolder;
+    const message = result.message || result.error || 'Failed to generate certificates.';
+    const errors = (summary.errors || []).filter(error => error !== message);
+    renderResult(
+        title, appearance, message, details, errors,
+        created > 0 && folder ? folder : ''
+    );
 }
 
-// Show error message
+function renderResult(title, appearance, message, details, errors, folder) {
+    const container = document.getElementById('resultContainer');
+    if (!container) return;
+
+    const isError = appearance === 'error';
+    const active = document.getElementById(isError ? 'errorResult' : 'successResult');
+    const inactive = document.getElementById(isError ? 'successResult' : 'errorResult');
+    const messageElement = document.getElementById(isError ? 'errorMessage' : 'successMessage');
+    const detailElement = document.getElementById(isError ? 'errorDetails' : 'successDetails');
+    active.querySelector('h3').textContent = title;
+    active.className = 'result result-' + appearance;
+    messageElement.textContent = message;
+    detailElement.replaceChildren();
+
+    if (details.length || errors.length) {
+        const list = document.createElement('ul');
+        const rows = details.map(([label, value]) => label + ': ' + value).concat(errors);
+        rows.forEach(row => {
+            const item = document.createElement('li');
+            item.textContent = row;
+            list.appendChild(item);
+        });
+        detailElement.appendChild(list);
+    }
+    if (folder) {
+        const path = document.createElement('p');
+        path.textContent = 'Certificates saved to your Google Drive in "' + folder + '".';
+        detailElement.appendChild(path);
+    }
+
+    inactive.style.display = 'none';
+    active.style.display = 'block';
+    container.style.display = 'block';
+}
+
 function showError(title, message) {
-    const container = document.getElementById('resultContainer');
-    const errorDiv = document.getElementById('errorResult');
-    const errorMsg = document.getElementById('errorMessage');
-    
-    if (errorMsg) errorMsg.textContent = message;
-    
-    if (container) container.style.display = 'block';
-    if (errorDiv) errorDiv.style.display = 'block';
-    
-    document.getElementById('successResult').style.display = 'none';
-}
-
-// Validate inputs
-function validateForm() {
-    const csvFile = document.getElementById('csvFile');
-    const templateId = document.getElementById('templateId');
-    
-    if (!csvFile || !csvFile.files.length) {
-        showError('Error', 'Please select a CSV file');
-        return false;
-    }
-    
-    if (!templateId || !templateId.value.trim()) {
-        showError('Error', 'Please enter template ID');
-        return false;
-    }
-    
-    const id = templateId.value.trim();
-    if (id.length < 20) {
-        showError('Error', 'Template ID appears to be invalid (too short). Copy from Google Slides URL.');
-        return false;
-    }
-    
-    return true;
+    renderResult(title, 'error', message, [], [], '');
 }
 
 // Utility: Format file size

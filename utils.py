@@ -6,86 +6,139 @@ Includes CheckpointManager, logging setup, and helpers.
 import json
 import logging
 import os
+import re
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Set
 
 from config import CHECKPOINT_FILENAME, LOG_FORMAT, LOG_FILENAME
 
 
+@contextmanager
+def output_checkpoint_lock(output_folder):
+    """Keep two CLI processes from reserving or writing the same output."""
+    lock_path = Path(output_folder) / '.certificate_checkpoint.lock'
+    with lock_path.open('a+b') as lock:
+        lock.seek(0)
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            raise RuntimeError("Could not lock the output folder. Check for another running generation.") from error
+        # Closing the handle releases the lock, including after a process exit.
+        yield
+
+
 class CheckpointManager:
-    """
-    Manages checkpoint state for resuming certificate generation.
-    Saves completed row indices to JSON file.
-    """
+    """Store independent CLI checkpoints for each input and template revision."""
 
-    def __init__(self, output_folder: str):
-        """
-        Initialize checkpoint manager.
-        
-        Args:
-            output_folder: Path to output folder where checkpoint is stored
-        """
+    def __init__(self, output_folder: str, identity=None):
         self.checkpoint_path = Path(output_folder) / CHECKPOINT_FILENAME
-        self.completed_rows: Set[int] = set()
-        self.temp_slide_ids: Dict[int, str] = {}
-        self.load()
+        self.identity = identity
+        self.batches = self._load_batches()
+        self.state = self.batches.get(identity, {})
+        self.completed_rows = set(self.state.get('completed_rows', []))
+        self.temp_slide_ids = self.state.get('temp_slide_ids', {})
+        self.output_files = self.state.get('output_files', {})
 
-    def load(self) -> None:
-        """Load checkpoint from file if it exists."""
-        if self.checkpoint_path.exists():
-            try:
-                with open(self.checkpoint_path, 'r') as f:
-                    data = json.load(f)
-                    self.completed_rows = set(data.get('completed_rows', []))
-                    self.temp_slide_ids = data.get('temp_slide_ids', {})
-                    logging.info(
-                        f"Loaded checkpoint: {len(self.completed_rows)} "
-                        f"completed rows, {len(self.temp_slide_ids)} temp slides tracked"
-                    )
-            except Exception as e:
-                logging.warning(f"Failed to load checkpoint: {e}. Starting fresh.")
-                self.completed_rows = set()
-                self.temp_slide_ids = {}
-        else:
-            logging.info("No existing checkpoint found. Starting new generation.")
+    def _load_batches(self):
+        try:
+            with self.checkpoint_path.open(encoding='utf-8') as checkpoint:
+                data = json.load(checkpoint)
+                if data.get('version') == 2 and isinstance(data.get('batches'), dict):
+                    return data['batches']
+                logging.warning("Ignoring a legacy checkpoint without input and template identity.")
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, TypeError, AttributeError) as error:
+            logging.warning("Ignoring an unreadable checkpoint: %s", error)
+        return {}
 
     def save(self) -> None:
-        """Save checkpoint to file."""
+        if self.identity is None:
+            return
+        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        self.batches[self.identity] = {
+            'completed_rows': sorted(self.completed_rows),
+            'temp_slide_ids': self.temp_slide_ids,
+            'output_files': self.output_files,
+            'last_saved': datetime.now().isoformat(),
+        }
+        # Preserve the last good checkpoint if writing is interrupted.
+        temp_path = None
         try:
-            os.makedirs(self.checkpoint_path.parent, exist_ok=True)
-            data = {
-                'completed_rows': sorted(list(self.completed_rows)),
-                'temp_slide_ids': self.temp_slide_ids,
-                'last_saved': datetime.now().isoformat(),
-            }
-            with open(self.checkpoint_path, 'w') as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            logging.error(f"Failed to save checkpoint: {e}")
+            with tempfile.NamedTemporaryFile(
+                mode='w', encoding='utf-8', suffix='.tmp',
+                dir=self.checkpoint_path.parent, delete=False,
+            ) as temporary:
+                temp_path = Path(temporary.name)
+                json.dump({'version': 2, 'batches': self.batches}, temporary, indent=2)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            temp_path.replace(self.checkpoint_path)
+        finally:
+            if temp_path:
+                temp_path.unlink(missing_ok=True)
 
     def is_complete(self, row_index: int) -> bool:
-        """Check if a row has already been processed."""
-        return row_index in self.completed_rows
+        key = str(row_index)
+        filename = self.output_files.get(key)
+        return (
+            row_index in self.completed_rows
+            and filename is not None
+            and Path(filename).name == filename
+            and filename.casefold() not in self._other_outputs(key)
+            and (self.checkpoint_path.parent / filename).is_file()
+        )
+
+    def _other_outputs(self, row_key):
+        reserved = {
+            filename.casefold() for identity, batch in self.batches.items()
+            if identity != self.identity for filename in batch.get('output_files', {}).values()
+        }
+        reserved.update(name.casefold() for key, name in self.output_files.items() if key != row_key)
+        return reserved
+
+    def plan_output(self, row_index: int, filename: str) -> str:
+        key = str(row_index)
+        reserved = self._other_outputs(key)
+        previous = self.output_files.get(key)
+        if (previous and Path(previous).name == previous and previous.casefold() not in reserved
+                and not (self.checkpoint_path.parent / previous).exists()):
+            return previous
+        suffix = 1
+        candidate = f'{filename}.pdf'
+        while candidate.casefold() in reserved or (self.checkpoint_path.parent / candidate).exists():
+            suffix += 1
+            candidate = f'{filename}_{suffix}.pdf'
+        self.completed_rows.discard(row_index)
+        self.output_files[key] = candidate
+        self.save()
+        return candidate
 
     def mark_complete(self, row_index: int, temp_slide_id: str = None) -> None:
-        """Mark a row as complete and optionally track its temp slide ID."""
         self.completed_rows.add(row_index)
         if temp_slide_id:
             self.temp_slide_ids[str(row_index)] = temp_slide_id
         self.save()
 
     def get_temp_slide_id(self, row_index: int) -> str:
-        """Get temp slide ID for a row, if tracked."""
         return self.temp_slide_ids.get(str(row_index))
 
     def clear(self) -> None:
-        """Clear checkpoint (use with caution)."""
         self.completed_rows = set()
         self.temp_slide_ids = {}
-        if self.checkpoint_path.exists():
-            self.checkpoint_path.unlink()
-            logging.info("Checkpoint cleared.")
+        self.output_files = {}
+        if self.identity is None:
+            self.checkpoint_path.unlink(missing_ok=True)
+        else:
+            self.save()
+        logging.info("Checkpoint cleared.")
 
 
 def setup_logging(output_folder: str, verbose: bool = False) -> None:
@@ -121,7 +174,7 @@ def setup_logging(output_folder: str, verbose: bool = False) -> None:
     logging.info(f"Logging initialized. Log file: {log_file}")
 
 
-def safe_filename(filename: str) -> str:
+def safe_filename(filename: str, *, max_bytes=220) -> str:
     """
     Remove or replace invalid filename characters.
     
@@ -131,9 +184,12 @@ def safe_filename(filename: str) -> str:
     Returns:
         Safe filename
     """
-    invalid_chars = r'[<>:"/\\|?*]'
-    safe = __import__('re').sub(invalid_chars, '_', filename)
-    safe = safe.strip('. ')
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', filename).strip('. ')
+    stem = safe.split('.', 1)[0].upper()
+    if re.fullmatch(r'CON|PRN|AUX|NUL|COM[1-9\u00b9\u00b2\u00b3]|LPT[1-9\u00b9\u00b2\u00b3]', stem):
+        safe = f'_{safe}'
+    # Leave room for PDF extensions and collision suffixes on local filesystems.
+    safe = safe.encode('utf-8')[:max_bytes].decode('utf-8', errors='ignore').rstrip('. ')
     return safe or 'certificate'
 
 
