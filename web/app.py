@@ -17,7 +17,7 @@ from io import BytesIO
 if os.environ.get('FLASK_ENV') in ('development', None) or os.environ.get('FLASK_ENV') != 'production':
     os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
-from flask import Flask, render_template, redirect, url_for, request, session, jsonify, send_file
+from flask import Flask, g, render_template, redirect, url_for, request, session, jsonify, send_file
 from itsdangerous import BadSignature, URLSafeSerializer
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -79,6 +79,31 @@ def get_flow():
     )
 
 
+def _save_session_credentials(creds):
+    session['credentials'] = creds.to_json(strip=['client_secret'])
+
+
+def _session_credentials():
+    if 'google_credentials' in g:
+        return g.google_credentials
+
+    info = session['credentials']
+    if isinstance(info, str):
+        info = json.loads(info)
+    if not isinstance(info, dict):
+        raise ValueError('Invalid OAuth session credentials')
+    if 'client_secret' in info:
+        info = {key: value for key, value in info.items() if key != 'client_secret'}
+        session['credentials'] = info
+    if info.get('client_id'):
+        client = get_flow().client_config
+        if client.get('client_id') != info['client_id']:
+            raise ValueError('The OAuth client for this session has changed')
+        info = dict(info, client_secret=client['client_secret'])
+    g.google_credentials = Credentials.from_authorized_user_info(info, GOOGLE_OAUTH_SCOPES)
+    return g.google_credentials
+
+
 def login_required(f):
     """Decorator to require user authentication."""
     @wraps(f)
@@ -90,16 +115,12 @@ def login_required(f):
         creds_data = session.get('credentials')
         if creds_data:
             try:
-                # Parse JSON string if needed
-                if isinstance(creds_data, str):
-                    creds_data = json.loads(creds_data)
-                
-                creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
+                creds = _session_credentials()
                 
                 # Check if credentials need refresh
                 if creds.expired and creds.refresh_token:
                     creds.refresh(GoogleRequest())
-                    session['credentials'] = creds.to_json()
+                    _save_session_credentials(creds)
             except ValueError:
                 # Credentials format invalid, redirect to login
                 session.clear()
@@ -163,7 +184,7 @@ def oauth_callback():
         creds = flow.credentials
         
         # Store credentials in session
-        session['credentials'] = creds.to_json()
+        _save_session_credentials(creds)
         session.permanent = True
         
         # Get user info
@@ -206,15 +227,12 @@ def api_drive_file_to_csv(file_id):
     """Download a file from Google Drive and convert to CSV."""
     try:
         # Get user credentials
-        creds_data = session.get('credentials')
-        if isinstance(creds_data, str):
-            creds_data = json.loads(creds_data)
-        creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
+        creds = _session_credentials()
         
         # Refresh credentials if needed
         if creds.expired and creds.refresh_token:
             creds.refresh(GoogleRequest())
-            session['credentials'] = creds.to_json()
+            _save_session_credentials(creds)
         
         # Get Drive API service
         from googleapiclient.discovery import build
@@ -287,15 +305,12 @@ def get_template_placeholders():
         if not creds_data:
             return jsonify({'error': 'Not authenticated'}), 401
         
-        if isinstance(creds_data, str):
-            creds_data = json.loads(creds_data)
-        
-        creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
+        creds = _session_credentials()
         
         # Refresh if needed
         if creds.expired and creds.refresh_token:
             creds.refresh(GoogleRequest())
-            session['credentials'] = creds.to_json()
+            _save_session_credentials(creds)
         
         # Build Slides service
         from googleapiclient.discovery import build
@@ -382,19 +397,12 @@ def _batch_signer():
     )
 
 
-def _batch_credentials():
-    creds_data = session['credentials']
-    if isinstance(creds_data, str):
-        creds_data = json.loads(creds_data)
-    return Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
-
-
 @app.route('/api/generation-batches/new')
 @login_required
 def api_reserve_generation_batch():
     """Reserve a retry key before the client starts the generation request."""
     try:
-        batch_id = reserve_web_batch(_batch_credentials())
+        batch_id = reserve_web_batch(_session_credentials())
         response = jsonify({'batch_id': _batch_signer().dumps(batch_id)})
         response.headers['Cache-Control'] = 'no-store'
         return response
@@ -412,7 +420,7 @@ def api_recover_generation_batch(token):
     except BadSignature:
         return invalid_generation_response('Invalid generation batch ID.')
     try:
-        summary = recover_web_batch(_batch_credentials(), batch_id)
+        summary = recover_web_batch(_session_credentials(), batch_id)
         if summary is None:
             return jsonify({'error': 'This generation batch has not started.'}), 404
         summary['batch_id'] = token
@@ -437,15 +445,12 @@ def api_generate():
         if not creds_data:
             return jsonify({'error': 'Not authenticated'}), 401
         
-        if isinstance(creds_data, str):
-            creds_data = json.loads(creds_data)
-        
-        creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
+        creds = _session_credentials()
         
         # Refresh if needed
         if creds.expired and creds.refresh_token:
             creds.refresh(GoogleRequest())
-            session['credentials'] = creds.to_json()
+            _save_session_credentials(creds)
         
         # Get form data
         template_id = request.form.get('template_id', '').strip()
@@ -575,11 +580,7 @@ def api_auth_token():
     """Get OAuth access token for Google Picker API."""
     creds_data = session.get('credentials')
     if creds_data:
-        # Parse JSON string if needed
-        if isinstance(creds_data, str):
-            creds_data = json.loads(creds_data)
-        
-        creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
+        creds = _session_credentials()
         return jsonify({'token': creds.token})
     
     return jsonify({'error': 'No credentials found'}), 401
@@ -642,10 +643,7 @@ def api_drive_sheets():
     """List all Google Sheets in user's Drive."""
     try:
         # Get user credentials
-        creds_data = session.get('credentials')
-        if isinstance(creds_data, str):
-            creds_data = json.loads(creds_data)
-        creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
+        creds = _session_credentials()
         
         # Get Drive API service
         from googleapiclient.discovery import build
@@ -683,15 +681,12 @@ def api_drive_sheet_names(sheet_id):
             return jsonify({'error': 'Invalid spreadsheet ID format'}), 400
         
         # Get user credentials
-        creds_data = session.get('credentials')
-        if isinstance(creds_data, str):
-            creds_data = json.loads(creds_data)
-        creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
+        creds = _session_credentials()
         
         # Refresh credentials if needed
         if creds.expired and creds.refresh_token:
             creds.refresh(GoogleRequest())
-            session['credentials'] = creds.to_json()
+            _save_session_credentials(creds)
         
         # Get Drive API service to check file type
         from googleapiclient.discovery import build
@@ -766,10 +761,7 @@ def api_sheets_list():
             return jsonify({'error': 'Invalid Google Sheets URL'}), 400
         
         # Get user credentials
-        creds_data = session.get('credentials')
-        if isinstance(creds_data, str):
-            creds_data = json.loads(creds_data)
-        creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
+        creds = _session_credentials()
         
         # Get sheets from workbook
         sheets_service = get_sheets_service(creds)
@@ -786,10 +778,7 @@ def api_sheets_list():
 
 def _sheet_records_from_request(data):
     sheet_id, sheet_name = _sheet_selection(data)
-    creds_data = session.get('credentials')
-    if isinstance(creds_data, str):
-        creds_data = json.loads(creds_data)
-    creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
+    creds = _session_credentials()
     return _read_sheet_records(creds, sheet_id, sheet_name)
 
 
@@ -858,11 +847,7 @@ def api_template_debug():
             return jsonify({'error': 'No template ID provided'}), 400
         
         # Get user credentials
-        creds_data = session.get('credentials')
-        if isinstance(creds_data, str):
-            creds_data = json.loads(creds_data)
-        
-        creds = Credentials.from_authorized_user_info(creds_data, GOOGLE_OAUTH_SCOPES)
+        creds = _session_credentials()
         
         # Get Slides API service
         from googleapiclient.discovery import build

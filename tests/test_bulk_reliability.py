@@ -217,6 +217,28 @@ def test_ambiguous_upload_response_is_reconciled(drive):
     assert len(drive.pdf_creates) == 1
 
 
+def test_unwritten_failure_receipt_leaves_the_row_pending(drive, monkeypatch):
+    create = drive.create
+
+    def create_without_receipt(body, **kwargs):
+        if body.get('mimeType') == 'text/plain':
+            def unavailable():
+                raise http_error(503)
+            return drive.request(unavailable)
+        return create(body, **kwargs)
+
+    monkeypatch.setattr(drive, 'create', create_without_receipt)
+    drive.fail_upload = True
+    batch = generator.reserve_web_batch(object())
+    result = web_generate(batch, RECORDS[:1])
+    assert (result['created_pdfs'], result['failed'], result['pending_rows']) == (0, 0, 1)
+    assert 'Generation paused' in result['errors'][0]
+    assert generator.recover_web_batch(object(), batch)['pending_rows'] == 1
+
+    drive.fail_upload = False
+    assert web_generate(batch, RECORDS[:1], retry_failed=True)['created_pdfs'] == 1
+
+
 @pytest.mark.parametrize('step', ['replace', 'export', 'upload'])
 def test_temporary_slide_cleanup_and_durable_retry_after_failed_step(drive, monkeypatch, step):
     batch = generator.reserve_web_batch(object())

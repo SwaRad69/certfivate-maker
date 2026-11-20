@@ -176,7 +176,6 @@ class DriveBatch:
 
     def record_failure(self, row_index, message):
         file_id = self.manifest['failure_ids'][row_index]
-        self.failures[row_index] = message
         body = {
             'id': file_id,
             'name': 'Certificate generation failure.txt',
@@ -193,6 +192,7 @@ class DriveBatch:
             self.files.update(
                 fileId=file_id, body={'description': message}, fields='id'
             ).execute()
+        self.failures[row_index] = message
 
     def clean_abandoned_slides(self, *, completed=False):
         clause = f"mimeType='{SLIDES_MIME_TYPE}'"

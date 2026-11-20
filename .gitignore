@@ -6,6 +6,7 @@
 # Credentials & Secrets - NEVER COMMIT THESE
 credentials.json
 client_secrets.json
+clients_secrets.json
 *.pem
 *.key
 

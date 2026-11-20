@@ -1,6 +1,9 @@
 setuptools
 numpy==1.26.4
 pandas==2.2.2
+Flask==2.3.3
+Werkzeug==2.3.7
+gunicorn==21.2.0
 google-api-python-client==2.104.0
 google-auth==2.27.0
 google-auth-oauthlib==1.2.0
