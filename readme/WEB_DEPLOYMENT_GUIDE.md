@@ -10,15 +10,11 @@ Deploy the Certificate Generator as a web application where users sign in with t
 1. User visits your website
 2. Clicks "Sign In with Google"
 3. Authorizes app to access their Drive
-4. Uploads CSV file + provides template ID
+4. Chooses recipient data from Drive or uploads a file, then uploads a PowerPoint template or selects Google Slides
 5. App generates certificates to their Drive
 6. User downloads PDFs from their Drive
 
-**Key Benefits:**
-- Decentralized storage (no server storage needed)
-- User privacy (each user's data in their Drive)
-- Scalable (no central bottleneck)
-- Minimal server resources
+Saved PDFs and batch recovery files live in the signed-in account's Google Drive. See the [web app guide](WEB_APP_COMPLETE.md) for template inputs, destination selection, and recovery.
 
 ---
 
@@ -27,7 +23,7 @@ Deploy the Certificate Generator as a web application where users sign in with t
 ### Step 1: Create OAuth2 Credentials
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Select your project (or create new)
+2. Select or create a project and enable the Google Drive, Slides, and Sheets APIs.
 3. Go to **APIs & Services** → **Credentials**
 4. Click **+ CREATE CREDENTIALS** → **OAuth 2.0 Client ID**
 5. Choose **Web application**
@@ -60,38 +56,14 @@ certificate-maker/
 
 ## Part 2: Local Development Setup
 
-### Installation
-
-```bash
-cd web
-pip install -r requirements.txt
-```
-
-### Development Environment
-
-Create a `.env` file in the `web/` directory:
-
-```env
-FLASK_ENV=development
-FLASK_SECRET_KEY=your-super-secret-dev-key-change-in-production
-GOOGLE_OAUTH_SECRETS=client_secrets.json
-PORT=5000
-```
-
-### Run Locally
-
-```bash
-python app.py
-```
-
-Visit: `http://localhost:5000`
+Use the [web quick start](WEB_QUICK_START.md) to install dependencies and run locally. See [environment setup](ENVIRONMENT_SETUP.md) for process settings and the OAuth credential path.
 
 ### Features to Test
 
 1. Click "Sign In with Google"
 2. Authorize the app
-3. Upload sample CSV
-4. Check certificates appear in Drive
+3. Choose sample recipient data and run **Test (First N)** with an uploaded PowerPoint and a Google Slides presentation.
+4. Use **Open output folder** in the results to verify that each test PDF is in Drive and the placeholders were replaced.
 5. Logout
 
 ---
@@ -101,9 +73,6 @@ Visit: `http://localhost:5000`
 Choose one of these hosting options:
 
 ### Option A: Heroku (Easiest)
-
-**Cost:** Free-$7/month  
-**Setup Time:** 15 minutes
 
 1. **Install Heroku CLI:**
    ```bash
@@ -129,11 +98,7 @@ Choose one of these hosting options:
    *.pyc
    ```
 
-5. **Add credentials to Heroku:**
-   ```bash
-   heroku config:set GOOGLE_OAUTH_SECRETS=@client_secrets.json
-   heroku config:set FLASK_SECRET_KEY=your-strong-random-key
-   ```
+5. Provision the OAuth client JSON as a runtime file. Set `GOOGLE_OAUTH_SECRETS` to its path and set `FLASK_ENV=production` and `FLASK_SECRET_KEY`.
 
 6. **Deploy:**
    ```bash
@@ -146,16 +111,17 @@ Your app is now live at: `https://certificate-generator-app.herokuapp.com`
 
 ### Option B: Google Cloud Run (Scalable)
 
-**Cost:** $0-20/month  
-**Setup Time:** 20 minutes
-
-1. **Create `Dockerfile` in web/ directory:**
+1. Create a `Dockerfile` in the repository root so the image includes both the Flask app and the shared Python modules.
    ```dockerfile
-   FROM python:3.9-slim
+   FROM python:3.11-slim
    WORKDIR /app
    COPY requirements.txt .
    RUN pip install -r requirements.txt
-   COPY . .
+   COPY batch.py config.py generator.py utils.py ./
+   COPY web/app.py web/file_converter.py ./web/
+   COPY web/static ./web/static
+   COPY web/templates ./web/templates
+   WORKDIR /app/web
    CMD ["gunicorn", "--bind", "0.0.0.0:8080", "app:app"]
    ```
 
@@ -168,25 +134,20 @@ Your app is now live at: `https://certificate-generator-app.herokuapp.com`
      --allow-unauthenticated
    ```
 
-3. **Set environment variables in Cloud Run:**
-   - FLASK_SECRET_KEY
-   - GOOGLE_OAUTH_SECRETS (JSON content)
+3. Mount the OAuth client JSON as a runtime secret file and set `GOOGLE_OAUTH_SECRETS` to that path. Set `FLASK_ENV=production` and a stable `FLASK_SECRET_KEY`.
 
 ---
 
 ### Option C: AWS Elastic Beanstalk
-
-**Cost:** $5-20/month  
-**Setup Time:** 30 minutes
 
 1. **Install EB CLI:**
    ```bash
    pip install awsebcli
    ```
 
-2. **Initialize:**
+2. Initialize on a Python 3.11 platform.
    ```bash
-   eb init -p python-3.9 certificate-generator --region us-east-1
+   eb init certificate-generator --region us-east-1
    ```
 
 3. **Create `.ebextensions/python.config`:**
@@ -201,10 +162,7 @@ Your app is now live at: `https://certificate-generator-app.herokuapp.com`
    eb create production
    ```
 
-5. **Set environment variables:**
-   ```bash
-   eb setenv FLASK_SECRET_KEY=your-key GOOGLE_OAUTH_SECRETS=@client_secrets.json
-   ```
+5. Provision the OAuth client JSON as a runtime file. Set `GOOGLE_OAUTH_SECRETS` to its path and set `FLASK_ENV=production` and `FLASK_SECRET_KEY`.
 
 6. **Deploy:**
    ```bash
@@ -279,7 +237,7 @@ Your app is now live at: `https://certificate-generator-app.herokuapp.com`
 ```
 FLASK_ENV=production
 FLASK_SECRET_KEY=<generate with: python -c 'import secrets; print(secrets.token_hex(32))'>
-GOOGLE_OAUTH_SECRETS=<paste contents of client_secrets.json>
+GOOGLE_OAUTH_SECRETS=/path/to/client_secrets.json
 ```
 
 ---
@@ -348,11 +306,9 @@ heroku domains:add www.yourcertificates.com
 
 ### Certificates Not Saving to Drive
 
-**Check:**
-1. User authenticated successfully
-2. Template ID is correct
-3. CSV format is valid
-4. Logs show no errors
+1. Check the result for **Created PDFs** and use **Open output folder** for any saved files.
+2. If Drive blocked the folder mid-batch, restore write access and resume. For a blocked folder with zero PDFs saved, start a new batch to use a writable folder in My Drive.
+3. For a template or column error, check the [web app guide](WEB_APP_COMPLETE.md#choose-the-data-and-template).
 
 ### App Crashes on Deployment
 
@@ -417,7 +373,7 @@ Create a landing page with:
 3. **FAQ section**
 4. **Contact support**
 
-See [WEB_USER_GUIDE.md](WEB_USER_GUIDE.md) (to be created).
+See the [web app guide](WEB_APP_COMPLETE.md).
 
 ---
 

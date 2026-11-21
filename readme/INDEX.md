@@ -4,11 +4,11 @@ Welcome! All documentation for the Certificate Generator project is organized he
 
 ---
 
-## Quick Start (5 minutes)
+## Quick Start
 
 **New to the project?** Start here!
 
-- **[WEB_QUICK_START.md](WEB_QUICK_START.md)** — Get the web app running locally in 5 minutes
+- **[WEB_QUICK_START.md](WEB_QUICK_START.md)** — Run the web app and generate a test PDF from PowerPoint or Google Slides
 - **[QUICK_START.md](QUICK_START.md)** — Get the CLI tool running locally
 
 ---
@@ -17,9 +17,9 @@ Welcome! All documentation for the Certificate Generator project is organized he
 
 **Setting up for the first time?**
 
-- **[ENVIRONMENT_SETUP.md](ENVIRONMENT_SETUP.md)** — How to create `.env` files and manage secrets
-- **[SETUP_GUIDE.md](SETUP_GUIDE.md)** — Complete setup guide for Google Cloud credentials
-- **[TEMPLATE_DESIGN_GUIDE.md](TEMPLATE_DESIGN_GUIDE.md)** — How to design certificates in Canva and set up Google Slides templates
+- **[ENVIRONMENT_SETUP.md](ENVIRONMENT_SETUP.md)** — Web app environment variables and credentials
+- **[SETUP_GUIDE.md](SETUP_GUIDE.md)** — Google Cloud service-account setup for the CLI
+- **[TEMPLATE_DESIGN_GUIDE.md](TEMPLATE_DESIGN_GUIDE.md)** — Prepare editable placeholders in PowerPoint or Google Slides
 
 ---
 
@@ -28,7 +28,8 @@ Welcome! All documentation for the Certificate Generator project is organized he
 **Ready to generate certificates?**
 
 - **[README.md](README.md)** — Complete reference for the CLI tool with all command options
-- **[WEB_QUICK_START.md](WEB_QUICK_START.md)** — How to use the web interface
+- **[WEB_APP_COMPLETE.md](WEB_APP_COMPLETE.md)** — Web template sources, output folders, grouping, and batch recovery
+- **[FILE_CONVERTER_GUIDE.md](FILE_CONVERTER_GUIDE.md)** — Recipient formats and column matching
 
 ---
 
@@ -46,8 +47,8 @@ Welcome! All documentation for the Certificate Generator project is organized he
 **Want to understand the project structure?**
 
 - **[PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md)** — File organization and code modules
-- **[IMPLEMENTATION_COMPLETE.md](IMPLEMENTATION_COMPLETE.md)** — What was built and completed
-- **[COMPLETE_SUMMARY.md](COMPLETE_SUMMARY.md)** — Full project summary and features
+- **[IMPLEMENTATION_COMPLETE.md](IMPLEMENTATION_COMPLETE.md)** — Original implementation notes
+- **[COMPLETE_SUMMARY.md](COMPLETE_SUMMARY.md)** — Original project summary
 
 ---
 
@@ -74,7 +75,7 @@ Welcome! All documentation for the Certificate Generator project is organized he
 
 | Document | Purpose | Duration |
 |----------|---------|----------|
-| WEB_QUICK_START.md | Run web app locally | 5 min |
+| WEB_QUICK_START.md | Run the web app and generate a sample | Quick start |
 | SETUP_GUIDE.md | Configure Google Cloud | 15 min |
 | TEMPLATE_DESIGN_GUIDE.md | Design certificates | 20 min |
 | ENVIRONMENT_SETUP.md | Manage .env files | 5 min |

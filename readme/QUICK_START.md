@@ -1,6 +1,6 @@
-# Quick Start Guide
+# CLI Quick Start Guide
 
-Get your certificate generator running in 10 minutes.
+Use the CLI to generate local PDFs from a native Google Slides template. For direct PowerPoint uploads and Drive output, see the [web quick start](WEB_QUICK_START.md).
 
 ---
 
@@ -13,7 +13,7 @@ Before starting, ensure you have:
 - [ ] Service Account created with credentials
 - [ ] `credentials.json` file downloaded
 - [ ] Template shared with service account email
-- [ ] Python 3.8+ installed
+- [ ] Python 3.11 installed
 - [ ] CSV file with participant data
 
 **Not done?** Follow [SETUP_GUIDE.md](SETUP_GUIDE.md) first (takes ~15 min).
@@ -55,17 +55,17 @@ python -c "import google.auth; print('✓ Setup complete')"
 Create a `participants.csv` file:
 
 ```csv
-Name,Email,Date,Event
+Participant Name,Email,Date,Event
 John Doe,john@example.com,April 13 2024,Spring Conference
 Jane Smith,jane@example.com,April 13 2024,Spring Conference
 ```
 
 **Rules:**
 - First row is header (column names)
-- Column names must match placeholders in slide
+- Match column and placeholder names without regard to case. `{{Name}}` uses `Participant Name` when the `Name` column is absent.
 - One row per certificate
 
-See `sample_participants.csv` for example.
+See the [recipient file formats](FILE_CONVERTER_GUIDE.md) for other inputs.
 
 ### Step 2: Get Your Template ID
 
@@ -108,7 +108,7 @@ Open any PDF to verify it looks correct!
 | Problem | Fix |
 |---------|-----|
 | "Credentials not found" | Put `credentials.json` in project root |
-| "Template not found" | Check template ID is correct (26+ chars) |
+| "Template not found" | Copy the ID between `/d/` and `/edit` in the Google Slides URL. Check the service account's access. |
 | "CSV not found" | Use full path: `python main.py --csv /path/to/file.csv ...` |
 | "{{Placeholder}} still in PDF" | Add missing column to CSV |
 | "Permission denied" | Share template with service account in Google Drive |

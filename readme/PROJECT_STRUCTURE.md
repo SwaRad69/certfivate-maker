@@ -11,7 +11,10 @@ This document explains each file and folder in the certificate generator project
 | File | Purpose | Key Functions |
 |------|---------|---|
 | **main.py** | CLI entry point | `main()` — parses arguments and invokes generation |
-| **generator.py** | Core business logic | `generate_certificates()`, `authenticate_google()`, `replace_text_in_slide()`, `export_slide_to_pdf()` |
+| **generator.py** | Shared certificate generation | `generate_certificates()` for the CLI, `generate_certificates_oauth2()` for the web app, and shared placeholder replacement |
+| **batch.py** | Drive-backed web recovery | `DriveBatch` stores the template snapshot reference, reserved PDF IDs, and row outcomes |
+| **web/app.py** | Flask app | OAuth sign-in, recipient and template selection, and batch endpoints |
+| **web/file_converter.py** | Recipient input reader | `read_input_records()` supplies headers and text-valued records |
 | **config.py** | Configuration & constants | API scopes, placeholder regex, default paths |
 | **utils.py** | Utilities & helpers | `CheckpointManager`, `setup_logging()`, `safe_filename()` |
 
@@ -19,10 +22,11 @@ This document explains each file and folder in the certificate generator project
 
 | File | Audience | Content |
 |------|----------|---------|
-| **README.md** | Users | Complete usage guide, troubleshooting, features |
-| **QUICK_START.md** | New users | 10-minute setup & first run |
-| **SETUP_GUIDE.md** | Setup only | Step-by-step Google Cloud project creation |
-| **TEMPLATE_DESIGN_GUIDE.md** | Template designers | Canva → Google Slides workflow |
+| **../README.md** | Users | Project overview |
+| **WEB_QUICK_START.md** | Web users | Google sign-in and a first test batch |
+| **QUICK_START.md** | CLI users | Service account and local PDF output |
+| **SETUP_GUIDE.md** | CLI setup | Google Cloud service-account configuration |
+| **TEMPLATE_DESIGN_GUIDE.md** | Template designers | Editable placeholders in PowerPoint or Google Slides |
 | **PROJECT_STRUCTURE.md** | Developers | This file — explains code organization |
 
 ### Configuration & Examples
@@ -30,7 +34,7 @@ This document explains each file and folder in the certificate generator project
 | File | Purpose |
 |------|---------|
 | **requirements.txt** | Python package dependencies |
-| **sample_participants.csv** | Example CSV for testing |
+| **tests/fixtures/** | Recipient data fixtures |
 | **.gitignore** | Excludes credentials, outputs, Python cache |
 | **credentials.json.example** | Template for service account credentials structure |
 
@@ -49,33 +53,19 @@ This document explains each file and folder in the certificate generator project
 ```
 certificate-maker/               # Project root
 │
-├── Core Code
-│   ├── main.py                 # Entry point - run this
-│   ├── generator.py            # All core logic
-│   ├── config.py               # Constants & configuration
-│   └── utils.py                # Helpers & checkpoint manager
-│
-├── Documentation
-│   ├── README.md               # ← Start here for usage
-│   ├── QUICK_START.md          # ← Fast setup (10 min)
-│   ├── SETUP_GUIDE.md          # Google Cloud setup
-│   ├── TEMPLATE_DESIGN_GUIDE.md # Canva workflow
-│   └── PROJECT_STRUCTURE.md    # This file
-│
-├── Configuration
-│   ├── requirements.txt        # pip install this
-│   ├── .gitignore             # Git exclusions
-│   └── credentials.json.example # Config template
-│
-├── Examples & Testing
-│   └── sample_participants.csv # Test data
-│
-└── Runtime Output (created when you run)
-    └── certificates/           # Default output folder
-        ├── John Doe.pdf
-        ├── Jane Smith.pdf
-        ├── certificate_generator.log
-        └── .certificate_checkpoint.json
+├── main.py                     # CLI entry point
+├── generator.py                # Shared generation logic
+├── batch.py                    # Drive-backed recovery
+├── config.py                   # Constants and configuration
+├── utils.py                    # Helpers and local checkpoints
+├── web/
+│   ├── app.py                  # Flask dashboard and API
+│   ├── file_converter.py       # Recipient data parsing
+│   ├── static/                 # Dashboard JavaScript and styles
+│   └── templates/              # Pages and in-app help
+├── readme/                     # User and developer guides
+├── tests/                      # Tests and input fixtures
+└── certificates/               # Default CLI output, created at runtime
 ```
 
 ---
@@ -117,12 +107,12 @@ certificate-maker/               # Project root
    - Returns: `Set[str]` of placeholder names
 
 3. **`read_csv(file_path)`**
-   - Loads CSV with pandas
-   - Converts to list of dicts
+   - Reads supported recipient files with the shared converter
+   - Converts data rows to dictionaries of text values
    - Returns: `List[Dict]` with one dict per row
 
 4. **`validate_csv_placeholders(csv_rows, detected_placeholders)`**
-   - Checks CSV columns match slide placeholders
+   - Checks column names against slide placeholders, ignoring case and using `Participant Name` as a fallback for `{{Name}}`
    - Returns: `(bool, List[str])` — is_valid, error_list
 
 5. **`duplicate_slide_template(drive_service, template_id, row_index)`**
@@ -146,6 +136,8 @@ certificate-maker/               # Project root
    - Loops through rows with checkpoint resume
    - Calls duplicate, replace, export for each
    - Returns: `Dict` with summary stats
+
+9. **`generate_certificates_oauth2(...)`** runs a web batch using the signed-in user's credentials. It imports a PowerPoint template when supplied and saves the PDFs to Drive.
 
 ---
 

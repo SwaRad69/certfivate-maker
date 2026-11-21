@@ -1,6 +1,6 @@
 # Setup Guide: Google Cloud Project & Service Account
 
-This guide walks you through setting up a Google Cloud Project and obtaining the service account credentials needed to run the certificate generator.
+This guide covers the service account used by the CLI. For the dashboard and direct PowerPoint uploads, follow the [web quick start](WEB_QUICK_START.md) to set up Google sign-in.
 
 ## Overview
 
@@ -165,14 +165,9 @@ You now have the credentials file needed to run the generator!
 5. Click **Share**
 6. (Optional) Check "Notify people" — service account won't receive email
 
-### 5.3 Share Output Folder (Optional)
+### 5.3 Check the Template's Drive Folder
 
-If you want to organize certificates in a Google Drive folder:
-
-1. Create a folder in Google Drive (or use existing)
-2. Share the folder with the service account email (same as above)
-3. Grant **Editor** access
-4. In the certificate generator, you can then specify this folder path
+The CLI creates temporary presentations beside the template. Give the service account permission to create files in that Drive folder. The `--output` argument points to a local folder for the PDFs. For Google Drive PDF output, use the [web dashboard](WEB_QUICK_START.md).
 
 ---
 
@@ -257,7 +252,7 @@ Once setup is complete:
 
 1. Design your certificate in Canva
 2. Export as PPTX and upload to Google Drive
-3. Open in Google Slides and add `{{Placeholder}}` text
+3. Save as a native Google Slides presentation and add editable `{{Placeholder}}` text.
 4. Get your template ID from the URL
 5. Create a CSV file with participant data
 6. Run the generator:

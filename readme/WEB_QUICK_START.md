@@ -1,235 +1,60 @@
 # Web App Quick Start
 
-Get the Certificate Generator web app running locally in 5 minutes.
+Run the dashboard locally to generate PDFs in your Google Drive. You can upload a PowerPoint template directly or use an existing Google Slides presentation.
 
----
+## Set up Google sign-in
 
-## Prerequisites
+1. Use Python 3.11 and a Google Cloud project with the Drive API, Slides API, and Sheets API enabled.
+2. Configure the OAuth consent screen and create an OAuth client of type **Web application**. Add your Google account as a test user if the app's audience requires it. See [Google OAuth setup](https://developers.google.com/identity/protocols/oauth2/web-server).
+3. Add `http://localhost:5000/auth/callback` as an authorized redirect URI. Open the app at `http://localhost:5000` so the callback uses the same host and port.
+4. Download the client JSON and save it as `web/client_secrets.json`. Keep this file out of version control.
 
-- Python 3.8+
-- Google Cloud Project with Drive & Slides APIs enabled
-- OAuth2 Client ID (JSON) from Google Cloud Console
+## Start the app
 
-**Don't have these?** Follow [WEB_DEPLOYMENT_GUIDE.md](WEB_DEPLOYMENT_GUIDE.md) Part 1 first.
+Run from the repository root. For PowerShell on Windows, use:
 
----
-
-## Step 1: Get OAuth2 Credentials (5 min)
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. **APIs & Services** → **Credentials** → **+ CREATE CREDENTIALS**
-3. Select **OAuth 2.0 Client ID** → **Web application**
-4. Add authorized URIs:
-   - Authorized JavaScript origin: `http://localhost:5000`
-   - Authorized redirect URI: `http://localhost:5000/auth/callback`
-5. Click **CREATE**
-6. Click **DOWNLOAD JSON**
-7. Save as `client_secrets.json` in the `web/` folder
-
-```
-certificate-maker/
-└── web/
-    ├── app.py
-    ├── client_secrets.json    ← Place here
-    └── requirements.txt
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+Set-Location web
+..\.venv\Scripts\python.exe app.py
 ```
 
----
-
-## Step 2: Install Dependencies (1 min)
+For macOS or Linux, use:
 
 ```bash
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 cd web
-pip install -r requirements.txt
+../.venv/bin/python app.py
 ```
 
----
+Open [http://localhost:5000](http://localhost:5000) and click **Sign In with Google**. Run the install commands once per environment. To reload the updated app, stop the server with Ctrl+C and run the final command again from `web/`.
 
-## Step 3: Create .env File (1 min)
+The default OAuth client path is relative to the working directory. Set `GOOGLE_OAUTH_SECRETS` in the process environment to use another path. See [environment setup](ENVIRONMENT_SETUP.md) for other settings.
 
-Create `web/.env`:
+## Generate a test certificate
 
-```env
-FLASK_ENV=development
-FLASK_SECRET_KEY=dev-secret-key
-GOOGLE_OAUTH_SECRETS=client_secrets.json
-PORT=5000
-```
+1. Under **Recipient data**, use **Google Drive** to choose a Google Sheet or CSV, or **CSV Upload** to upload a supported local file. If you pick a Google Sheet, select the tab with your recipients. For example, you can upload this CSV.
 
----
+   ```csv
+   Participant Name,Event
+   Ada Example,Quantum Week
+   ```
 
-## Step 4: Run the App (1 min)
-
-```bash
-python app.py
-```
-
-**Output:**
-```
- * Running on http://127.0.0.1:5000
-```
-
----
-
-## Step 5: Test It
-
-1. Open browser: `http://localhost:5000`
-2. Click "Sign In with Google"
-3. Authorize the app
-4. Upload a sample CSV file
-5. Enter your template ID
-6. Click "Generate"
-7. Check your Google Drive for certificates
-
----
-
-## Testing Checklist
-
-- [ ] App runs without errors
-- [ ] OAuth login works
-- [ ] Dashboard loads after login
-- [ ] Can upload CSV file
-- [ ] Template ID accepted
-- [ ] Generation starts/completes
-- [ ] Certificates appear in Drive
-
----
-
-## File Structure
-
-```
-web/
-├── app.py                      # Flask application
-├── static/
-│   ├── style.css              # Styling
-│   └── main.js                # JavaScript
-├── templates/
-│   ├── base.html              # Base template
-│   ├── login.html             # Login page
-│   ├── dashboard.html         # Main interface
-│   ├── help.html              # Help page
-│   ├── 404.html               # Error pages
-│   └── 500.html
-├── client_secrets.json        # OAuth credentials (Git ignored)
-├── .env                       # Environment variables (Git ignored)
-└── requirements.txt           # Python dependencies
-```
-
----
-
-## Environment Variables
-
-| Variable | Purpose | Example |
-|----------|---------|---------|
-| `FLASK_ENV` | Development or production | `development` |
-| `FLASK_SECRET_KEY` | Session encryption key | Long random string |
-| `GOOGLE_OAUTH_SECRETS` | Path to OAuth JSON | `client_secrets.json` |
-| `PORT` | Port to run on | `5000` |
-
----
+2. Type `{{Name}}` in an editable text box on the certificate slide. In the example above, the app gets the value from `Participant Name`.
+3. Under **Certificate template**, choose **Upload from computer (.ppt or .pptx)** and pick your file. For a Google Slides template, choose **Google Slides**, then select a presentation from Drive or paste a Slides link or ID.
+4. Set **Output Folder (in Drive)**. Select **Test (First N)**, enter `1`, then click **Start Test**.
+5. Click **Open output folder** in the results and check the PDF in the folder ending in `(TEST)`. Click **Generate Certificates** to run all rows once the sample looks right.
 
 ## Troubleshooting
 
-### "ModuleNotFoundError: No module named 'flask'"
+| Symptom | What to check |
+| --- | --- |
+| The app cannot find the OAuth client JSON | Confirm that `client_secrets.json` is in `web/` and launch the app from that directory. |
+| Google reports a redirect URI mismatch | Check that the registered URI exactly matches the browser host, port, and `/auth/callback` path. |
+| PowerPoint conversion reports missing editable text | Type the listed placeholders into regular text boxes on the certificate slide in PowerPoint and upload the file again. |
+| The app reports missing data columns | Match the column names to the missing placeholders. `{{Name}}` looks for `Name` first, then `Participant Name`. |
+| Generation pauses or Drive rejects the upload | Open **Recover a generation batch** and use **Check Batch Status**. See [batch recovery](WEB_APP_COMPLETE.md#recover-an-interrupted-batch) for the next step. |
 
-**Fix:** Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### "FileNotFoundError: client_secrets.json"
-
-**Fix:** Download from Google Cloud Console and place in `web/` folder
-
-### OAuth redirect URI mismatch error
-
-**Fix:** 
-1. Check URL matches: `http://localhost:5000`
-2. Update in Google Cloud Console if different
-3. Wait 5 min for changes to sync
-
-### "Permission denied" generating certificates
-
-**Fix:**
-1. Verify template is shared with your Google account
-2. Try refreshing Google Drive browser tab
-3. Check template permissions (should be "Editor")
-
-### App crashes after login
-
-**Check logs:**
-1. Look for errors in console
-2. Verify CSV file format
-3. Verify template ID is correct
-
----
-
-## Common Issues
-
-**Q: Certificates not appearing in Drive**
-- A: Check output folder name (default: "Certificate Generator")
-- A: Refresh Google Drive (F5)
-- A: Check generation log for errors
-
-**Q: "Invalid template ID"**
-- A: ID should be 26+ characters
-- A: Copy full ID from Google Slides URL
-- A: Must be a Slides presentation, not Docs/Sheets
-
-**Q: CSV validation error**
-- A: Column names must match placeholders exactly (case-sensitive)
-- A: Example: `{{Name}}` requires "Name" column in CSV
-
----
-
-## Next: Deploy to Production
-
-When ready to deploy:
-
-1. See [WEB_DEPLOYMENT_GUIDE.md](WEB_DEPLOYMENT_GUIDE.md)
-2. Choose hosting (Heroku, Cloud Run, Fly.io, etc.)
-3. Follow deployment steps
-4. Update Google OAuth redirect URIs
-5. Test on live URL
-
----
-
-## Development Tips
-
-**Enable Debug Mode:**
-
-Edit `app.py`:
-```python
-if __name__ == '__main__':
-    app.run(debug=True)  # Auto-reload on changes
-```
-
-**Test With Sample Data:**
-
-Use `sample_participants.csv` from root:
-```bash
-# Copy to web folder
-cp sample_participants.csv web/
-```
-
-**Monitor Requests:**
-
-Add logging to see what's happening:
-```python
-import logging
-logging.basicConfig(level=logging.DEBUG)
-```
-
----
-
-## Local Development Workflow
-
-1. **Make code changes**
-2. **Save file** (auto-reload if debug mode)
-3. **Test in browser** (refresh page)
-4. **Check console** for errors
-5. **Commit changes**: `git add . && git commit -m "message"`
-
----
-
-**Ready?** Start the app: `python app.py`
+See the [web app guide](WEB_APP_COMPLETE.md) for grouping, output folders, and recovery.

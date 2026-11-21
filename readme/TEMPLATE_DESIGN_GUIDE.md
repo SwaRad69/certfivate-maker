@@ -1,15 +1,13 @@
 # Template Design Guide
 
-This document provides guidance on designing your certificate template in Canva and converting it to Google Slides.
+Design your certificate in Canva, PowerPoint, or Google Slides. The web dashboard accepts a PowerPoint file or a native Google Slides presentation.
 
 ## Process Overview
 
-1. **Design in Canva** — Create your certificate design with layouts, colors, images
-2. **Export from Canva** — Export as PPTX (preferred)
-3. **Upload to Google Drive** — Upload the PPTX file
-4. **Open in Google Slides** — Google auto-converts it
-5. **Add Placeholders in Google Slides** — Replace text with `{{Placeholder}}`
-6. **Share with Service Account** — Grant the service account editor access
+1. Design the certificate and leave room for the recipient name and other dynamic fields.
+2. If you start in Canva, download the design as `.pptx` and open it in PowerPoint.
+3. Type placeholders such as `{{Name}}` into editable text boxes directly on the certificate slide.
+4. In the web dashboard, choose **Upload from computer (.ppt or .pptx)** or select a native **Google Slides** presentation. The app converts an uploaded PowerPoint file when generation starts.
 
 ---
 
@@ -67,30 +65,17 @@ This document provides guidance on designing your certificate template in Canva 
 
 This preserves formatting much better than exporting as image.
 
-### Step 2: Upload to Google Drive
-
-1. Go to [Google Drive](https://drive.google.com/)
-2. Click **New** → **File upload**
-3. Select your downloaded PPTX file
-4. Wait for upload to complete
-
-### Step 3: Open in Google Slides
-
-1. Right-click the uploaded file
-2. Click **Open with** → **Google Slides**
-3. Google automatically converts the PPTX
-4. Wait for conversion (usually instant)
+Open the downloaded file in PowerPoint to add or verify the editable text boxes. If you want to use the Google Slides chooser or CLI, open the file in Google Slides and save it as a native Google Slides presentation.
 
 ---
 
-## Add Placeholders in Google Slides
+## Add Placeholders in PowerPoint or Google Slides
 
 ### Key Points
 
-- **Placeholder syntax:** `{{FieldName}}`
-- **Case-sensitive:** `{{Name}}` ≠ `{{name}}`
-- **Must match CSV columns:** Column name in CSV = Placeholder name
-- **Edit in Google Slides, not Canva**
+- Use double braces, as in `{{FieldName}}`.
+- Match the data column name without regard to case. `{{Name}}` and `{{name}}` both use the `Name` column, with `Participant Name` as the fallback when `Name` is absent.
+- Place the token in a regular editable text box on the slide. As part of the background, a picture, WordArt, or the Slide Master, it may be unavailable for replacement after conversion.
 
 ### Adding Placeholders
 
@@ -98,8 +83,8 @@ This preserves formatting much better than exporting as image.
 
 If your Canva design has sample text like "[Name]" or "[Your Name Here]":
 
-1. Click on that text box in Google Slides
-2. Triple-click to select all text in the box
+1. Click the text box in PowerPoint or Google Slides
+2. Select the sample text in the box
 3. Type: `{{Name}}`
 4. Click outside to deselect
 
@@ -112,7 +97,7 @@ To add a new dynamic field:
 3. Type the placeholder: `{{FieldName}}`
 4. Click outside to finish
 
-#### Option 3: Find & Replace (Bulk)
+#### Option 3: Find and Replace in Google Slides
 
 If you have multiple fields to update:
 
@@ -122,7 +107,7 @@ If you have multiple fields to update:
 
 ### Example Template Text
 
-In your Google Slides, each dynamic section might look like:
+Your certificate slide can use this text:
 
 ```
 Certificate of Completion
@@ -146,11 +131,11 @@ Date: {{Date}}
 
 ## Placeholder Mapping
 
-Your CSV column names MUST match placeholder names exactly.
+Provide a matching recipient data column for each placeholder. Column matching ignores capitalization. The `{{Name}}` placeholder checks `Name` before `Participant Name`.
 
 ### Example Mapping
 
-**Google Slides placeholders:**
+These are the placeholders for the example template.
 ```
 {{Name}}
 {{Email}}
@@ -159,16 +144,13 @@ Your CSV column names MUST match placeholder names exactly.
 {{CompletionStatus}}
 ```
 
-**Required CSV columns:**
+This CSV supplies the matching columns.
 ```csv
 Name,Email,Event,Date,CompletionStatus
 John Doe,john@example.com,Leadership Course,April 13 2024,Passed with Distinction
 ```
 
-**Rules:**
-- All placeholders must have matching CSV columns
-- Extra CSV columns are OK (they're just ignored)
-- Column names are case-sensitive
+Extra columns can be used for PDF filenames or grouping, even when the template has no corresponding placeholder.
 
 ---
 
@@ -178,7 +160,7 @@ Here are common fields used in certificates:
 
 | Placeholder | CSV Column | Example Value |
 |-------------|-----------|----------------|
-| `{{Name}}` | Name | John Doe |
+| `{{Name}}` | `Name` or `Participant Name` | John Doe |
 | `{{Email}}` | Email | john@example.com |
 | `{{Date}}` | Date | April 13, 2024 |
 | `{{Event}}` | Event | Spring Conference |
@@ -197,26 +179,14 @@ Before generating all certificates:
 
 ### Test Steps
 
-1. **Verify placeholders are present:**
-   - Run tool with `--verbose` flag
-   - Log will show detected placeholders
-   - Verify all {{Placeholder}} are detected
-
-2. **Test with sample CSV:**
-   - Use `sample_participants.csv` included in project
-   - Or create a 1-row test CSV
-   - Generate one certificate
-   - Check the PDF output looks correct
-
-3. **Check text replacement:**
-   - Values should appear where placeholders were
-   - No `{{Placeholder}}` text should remain
-   - Formatting should look professional
+1. Choose your data and template on the dashboard. Set **Test (First N)** to `1` and click **Start Test**.
+2. Click **Open output folder** to open the PDF in the Drive folder ending in `(TEST)`.
+3. Check that the recipient's values fit the text boxes and that the fonts and layout look right after conversion.
 
 ### Debug Command
 
 ```bash
-python main.py --csv sample_participants.csv --template YOUR_TEMPLATE_ID --verbose --output ./test_output
+python main.py --csv participants.csv --template YOUR_TEMPLATE_ID --verbose --output ./test_output
 ```
 
 ---
@@ -230,17 +200,17 @@ python main.py --csv sample_participants.csv --template YOUR_TEMPLATE_ID --verbo
 **Solutions:**
 1. Verify placeholders use exact syntax: `{{FieldName}}`
 2. Check spelling matches CSV columns
-3. Ensure text is in a text box or shape (not just floating)
-4. Try clicking into text box and re-typing the placeholder
+3. Type the placeholder into a regular editable text box directly on the slide, then save and upload the PowerPoint again.
+4. If the app names placeholders that conversion did not preserve, check those text boxes first. If it reports finding text in the Slide Master or a layout, add the editable placeholder to the certificate slide.
 
 ### Problem: Text Replacement Didn't Work
 
 **Issue:** PDF still shows `{{Name}}` instead of actual name
 
 **Solutions:**
-1. Verify CSV column name matches placeholder name exactly (case-sensitive)
-2. Check for extra spaces: `{{ Name}}` won't match `{{Name}}`
-3. Ensure CSV has data in that row/column (no empty cells)
+1. Check that each placeholder has a matching data column. `{{Name}}` reads `Name` first, then `Participant Name` when `Name` is absent.
+2. Check that the selected recipient rows have values in the matching columns.
+3. Review the generation result for a missing column or a placeholder that conversion left out.
 
 ### Problem: Formatting Changed After Export
 
@@ -282,15 +252,15 @@ python main.py --csv sample_participants.csv --template YOUR_TEMPLATE_ID --verbo
 ### Export
 
 - Use PPTX format (preserves better than PNG)
-- Share template with service account before generating
+- For the CLI, share the native Google Slides template with the configured service account.
 - Keep original Canva file (allows re-export if needed)
 - Test download/open to verify file integrity
 
 ---
 
-## Template Sharing
+## Template Sharing for Google Slides
 
-**Important:** before running the generator, share the template with the service account email.
+In the web dashboard, the signed-in Google account needs permission to read and copy the presentation. When using the CLI, share the template with the service account and give it permission to create temporary copies in the template's Drive folder.
 
 1. Open your Google Slides template
 2. Click **Share** (top right)
@@ -301,24 +271,13 @@ python main.py --csv sample_participants.csv --template YOUR_TEMPLATE_ID --verbo
 4. Set access to **Editor**
 5. Click **Share**
 
-The service account needs **Editor** access to:
-- Read the template
-- Create copies
-- Update text
-- Export as PDF
+Check access to the parent Drive folder separately if the CLI cannot create a copy.
 
 ---
 
 ## Next Steps
 
-1. **Design your template** in Canva
-2. **Export as PPTX** and upload to Google Drive
-3. **Open in Google Slides** and add `{{Placeholder}}` text
-4. **Share with service account** (see Setup Guide)
-5. **Test** with sample CSV
-6. **Generate certificates** with full dataset
-
-See [README.md](README.md) for command examples.
+Follow the [web quick start](WEB_QUICK_START.md) to generate from a PowerPoint or Google Slides template. See the [CLI reference](README.md) for command examples.
 
 ---
 

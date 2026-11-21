@@ -5,20 +5,12 @@
 ### Quick Start (Windows PowerShell)
 
 ```powershell
-# 1. Navigate to the project
-cd "C:\Users\hebba_sglgqoe\Desktop\silly projects\certfivate maker"
-
-# 2. Activate virtual environment
-.\.venv\Scripts\Activate.ps1
-
-# 3. Go to web directory
-cd web
-
-# 4. Start the app
-python app.py
+# From the repository root, after completing the web quick start
+Set-Location web
+..\.venv\Scripts\python.exe app.py
 ```
 
-Then open http://localhost:5000/ in your browser.
+Open [http://localhost:5000](http://localhost:5000) and choose local PowerPoint or Google Slides under **Certificate template**. For a first-time setup, follow the [web quick start](WEB_QUICK_START.md).
 
 ---
 
@@ -91,23 +83,20 @@ pip install -r requirements.txt
 certfivate maker/
 ├── web/
 │   ├── app.py                 # Main Flask application
-│   ├── generator.py           # Certificate generation logic
 │   ├── file_converter.py      # Multi-format file conversion
-│   ├── config.py              # Configuration
 │   ├── templates/             # HTML templates
 │   ├── static/                # CSS & JavaScript
 │   ├── requirements.txt        # Python dependencies
 │   └── client_secrets.json    # (NOT in Git - add manually)
-├── generator.py               # CLI certificate generator
-├── config.py                  # CLI configuration
-├── .env                       # (NOT in Git - copy from .env.example)
+├── generator.py               # Shared template and PDF generation logic
+├── batch.py                   # Drive-backed web batch recovery
+├── config.py                  # Shared configuration
 ├── .env.example              # Environment template
 ├── .gitignore                # Git ignore rules
 ├── Procfile                  # Render deployment config
 ├── runtime.txt               # Python version
-├── requirements.txt          # Root dependencies (symlinked to web/)
-├── DEPLOYMENT_GUIDE.md       # Production deployment guide
-├── QUICK_START.md            # Quick start guide
+├── requirements.txt          # Python dependencies
+├── readme/                   # User guides and deployment documentation
 └── README.md                 # Project overview
 ```
 

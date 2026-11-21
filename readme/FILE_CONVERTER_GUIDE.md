@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Certificate Generator now includes a built-in universal file converter that automatically converts various data formats to CSV before processing. This eliminates the need to manually prepare your files in a specific format.
+The dashboard reads recipient data from an uploaded file or from Google Drive. Use **CSV Upload** for a local recipient file and **Certificate template** for a PowerPoint or Google Slides template.
 
 ## Supported File Formats
 
@@ -11,6 +11,7 @@ The Certificate Generator now includes a built-in universal file converter that 
 | **CSV** | `.csv` | Comma-Separated Values (standard format) |
 | **TSV** | `.tsv` | Tab-Separated Values |
 | **Excel (Modern)** | `.xlsx` | Microsoft Excel spreadsheets (2007+) |
+| **Excel (Macro-Enabled)** | `.xlsm` | Workbook data with cached formula values when available |
 | **Excel (Legacy)** | `.xls` | Microsoft Excel spreadsheets (97-2003) |
 | **OpenDocument** | `.ods` | OpenDocument Spreadsheets (LibreOffice/OpenOffice) |
 | **JSON** | `.json` | Array of objects: `[{"name": "John", "email": "..."}]` |
@@ -19,10 +20,9 @@ The Certificate Generator now includes a built-in universal file converter that 
 
 ## How It Works
 
-1. **Upload any supported file** in the "Data File" section of the dashboard
-2. **Automatic conversion** - The file is instantly converted to CSV format
-3. **Processing** - The converted CSV is used to generate certificates
-4. **No manual preparation needed** - Works with files from any source!
+1. Open **CSV Upload** and click **Choose data file**.
+2. Choose your local recipient file. The app reads its headers and rows and offers available columns for grouping.
+3. Choose a certificate template and generate. **Test (First N)** uses the first N data rows.
 
 ## Format Details
 
@@ -31,7 +31,7 @@ The Certificate Generator now includes a built-in universal file converter that 
 - Cells retain their text, including leading zeros, Unicode, and empty values.
 - First N counts complete data records after the header, including records that span several lines.
 
-### Excel Files (XLS/XLSX)
+### Excel Files (XLSX/XLSM/XLS)
 - Uploads read the first worksheet.
 - Text and empty cells are preserved. The reader renders common fixed-decimal, percentage, currency, date, time, and zero-padded formats such as `00000`.
 - A numeric cell with General formatting contains no leading zeros. Store identifiers as text when the exact spelling matters.
@@ -40,6 +40,8 @@ The Certificate Generator now includes a built-in universal file converter that 
 ### Google Sheets
 
 Preview and generation use the displayed values from the selected tab, including columns after Z.
+
+Under **Google Drive**, you can also choose a CSV already saved in Drive.
 
 ### OpenDocument (ODS)
 - Fully compatible with LibreOffice and OpenOffice
@@ -69,7 +71,7 @@ One JSON object per line:
 ### Python Packages
 
 Standard requirements (included in `requirements.txt`):
-- `openpyxl` for modern XLSX workbooks
+- `openpyxl` for XLSX and XLSM workbooks
 - `xlrd` for legacy XLS workbooks
 - `odfpy` - For OpenDocument (ODS) conversion
 
@@ -80,10 +82,10 @@ pip install openpyxl xlrd odfpy
 
 ## Best Practices
 
-1. **Column Names** - Ensure your data has column headers that match your template placeholders
+1. Use column headers that match your template placeholders without regard to case. `{{Name}}` uses `Name` first and falls back to `Participant Name` when `Name` is absent.
 2. **Encoding** - Use UTF-8 encoding when saving files for best compatibility
 3. **Data Validation** - Check that your data is complete before uploading
-4. **Template Matching** - Verify column names match your Google Slides template variables
+4. A column can supply PDF filenames or subfolder names even when it has no matching placeholder.
 
 ## Error Handling
 
@@ -101,7 +103,7 @@ For JSON files, ensure:
 ## Examples
 
 ### Converting From Excel
-1. Have your data in any Excel format (XLS/XLSX)
+1. Save your data as `.xlsx`, `.xlsm`, or `.xls`.
 2. Click "Choose data file" and select your Excel file
 3. System automatically converts to CSV
 4. Upload and generate!

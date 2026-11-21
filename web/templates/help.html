@@ -9,10 +9,10 @@
     <div class="help-section">
         <h3>📚 Quick Start</h3>
         <ol>
-            <li>Add editable {% raw %}{{Placeholder}}{% endraw %} text to your certificate design.</li>
-            <li>Upload a .pptx or .ppt file from your computer, or choose a Google Slides presentation.</li>
-            <li>Choose your participant data and click <strong>Generate Certificates</strong>.</li>
-            <li>Open the output folder in Google Drive to find the PDFs.</li>
+            <li>Add editable {% raw %}{{Placeholder}}{% endraw %} text directly to the certificate slide.</li>
+            <li>Under <strong>Certificate template</strong>, choose <strong>Upload from computer (.ppt or .pptx)</strong> or <strong>Google Slides</strong>.</li>
+            <li>Choose your recipient data and click <strong>Generate Certificates</strong>. Use <strong>Test (First N)</strong> for a sample.</li>
+            <li>Click <strong>Open output folder</strong> in the results to find your PDFs.</li>
         </ol>
     </div>
 
@@ -23,7 +23,7 @@
             <li>Add your logo, borders, and styling</li>
             <li>Include text like "Certificate of Completion"</li>
             <li>Leave space for participant name and details</li>
-            <li><strong>Export as PPTX</strong> (not PNG or PDF)</li>
+            <li><strong>Export as PPTX</strong> and open it in PowerPoint to verify the editable text boxes</li>
         </ul>
     </div>
 
@@ -41,20 +41,21 @@
             <li><code>{% raw %}{{Name}}{% endraw %}</code> → Replaced with participant name</li>
             <li><code>{% raw %}{{Email}}{% endraw %}</code> → Replaced with email address</li>
             <li><code>{% raw %}{{Date}}{% endraw %}</code> → Replaced with date</li>
-            <li><code>{% raw %}{{Any Custom Field}}{% endraw %}</code> → Matches CSV column</li>
+            <li><code>{% raw %}{{Any Custom Field}}{% endraw %}</code> → Matches a recipient column</li>
         </ul>
     </div>
 
     <div class="help-section">
-        <h3>📋 CSV File Format</h3>
-        <p>Create a CSV (Excel) file with your participant data:</p>
+        <h3>📋 Recipient Data</h3>
+        <p>Use <strong>Google Drive</strong> to select a CSV or a Google Sheets tab. Use <strong>CSV Upload</strong> to upload a local CSV, Excel, TSV, TXT, ODS, JSON, or JSONL file. Uploaded Excel workbooks use the first worksheet.</p>
+        <p>This CSV supplies values for a certificate template.</p>
         
-        <pre>Name,Email,Date,Event
+        <pre>Participant Name,Email,Date,Event
 John Doe,john@example.com,April 13 2024,Spring Conference
 Jane Smith,jane@example.com,April 13 2024,Spring Conference
 Bob Johnson,bob@example.com,April 13 2024,Spring Conference</pre>
 
-        <h4>Rules:</h4>
+        <h4>Column Matching</h4>
         <ul>
             <li>First row must be column headers</li>
             <li>Match column names to placeholder names regardless of capitalization. {% raw %}{{Name}}{% endraw %} uses <strong>Participant Name</strong> when there is no <strong>Name</strong> column.</li>
@@ -66,54 +67,35 @@ Bob Johnson,bob@example.com,April 13 2024,Spring Conference</pre>
     <div class="help-section">
         <h3>Find a Google Slides Template ID</h3>
         <ol>
-            <li>Open your template in Google Slides</li>
-            <li>Look at the URL in address bar:</li>
-            <li><code>https://docs.google.com/presentation/d/<strong>1abc2def3ghi4jkl5mno6pqr/</strong>edit</code></li>
-            <li>Copy the bold part (26+ character ID)</li>
-            <li>Paste into the "Template ID" field on this site</li>
+            <li>Open the native presentation in Google Slides.</li>
+            <li>Copy its address, such as <code>https://docs.google.com/presentation/d/<strong>1abc2def3ghi4jkl5mno6pqr</strong>/edit</code>.</li>
+            <li>On the dashboard, choose <strong>Google Slides</strong> and paste the full link or the highlighted ID.</li>
         </ol>
     </div>
 
     <div class="help-section">
         <h3>⚡ Generate Certificates</h3>
         <ol>
-            <li>Click "Generate Certificates" button on dashboard</li>
-            <li>Upload your CSV file</li>
-            <li>Upload a PowerPoint template or select a Google Slides presentation</li>
-            <li>Optional: Change output folder name (default: "Certificate Generator")</li>
-            <li>Click "Generate"</li>
-            <li>Wait for completion (takes ~15-30 seconds per certificate)</li>
-            <li>Certificates automatically appear in your Google Drive folder</li>
+            <li>Choose the recipient data and template. Select a filename field if you want to use a different column.</li>
+            <li>Enter an output folder name or use <strong>Certificate Generator</strong>. New batches use a writable folder at the top level of <strong>My Drive</strong>.</li>
+            <li>To organize PDFs, select <strong>Group certificates by column</strong>. Rows with blank group values go in the main output folder.</li>
+            <li>Click <strong>Generate Certificates</strong> for every row, or use <strong>Test (First N)</strong> and <strong>Start Test</strong> for a sample in a folder ending in <code>(TEST)</code>.</li>
         </ol>
-
-        <h4>Processing Time</h4>
-        <ul>
-            <li>10 certificates: 3-5 minutes</li>
-            <li>50 certificates: 15-25 minutes</li>
-            <li>100 certificates: 30-50 minutes</li>
-        </ul>
     </div>
 
     <div class="help-section">
         <h3>💾 Download Certificates</h3>
-        <p>After generation completes:</p>
-        <ol>
-            <li>Open Google Drive</li>
-            <li>Navigate to the output folder (e.g., "Certificate Generator")</li>
-            <li>Each PDF file is named: <strong>[Participant Name].pdf</strong></li>
-            <li>Download or share directly from Drive</li>
-        </ol>
+        <p>Check <strong>Created PDFs</strong> in the results, then click <strong>Open output folder</strong> to download or share the saved PDFs from Drive.</p>
     </div>
 
     <div class="help-section">
-        <h3>🔒 Privacy & Security</h3>
-        <ul>
-            <li>✅ You sign in with your own Google account</li>
-            <li>✅ Certificates are saved to your Drive, not our servers</li>
-            <li>✅ We never store your CSV data</li>
-            <li>✅ Your credentials are only used for Google Drive access</li>
-            <li>✅ All data stays within your Google account</li>
-        </ul>
+        <h3>Recover an Interrupted Batch</h3>
+        <ol>
+            <li>Select the batch under <strong>Recover a generation batch</strong> and click <strong>Check Batch Status</strong>.</li>
+            <li>Use <strong>Resume Batch</strong> with the original data and settings. After a reload, reselect the original recipient data and upload the PowerPoint again if the app asks for it.</li>
+            <li>If Drive blocks the folder after saving some PDFs, restore write access and resume. If zero PDFs were saved to a blocked destination, start a new batch so the app can choose a writable folder.</li>
+        </ol>
+        <p>The app stores PDFs and batch recovery state in the signed-in account's Drive.</p>
     </div>
 
     <div class="help-section">
@@ -123,16 +105,10 @@ Bob Johnson,bob@example.com,April 13 2024,Spring Conference</pre>
         <p>Yes. Match your CSV column names to your template placeholders.</p>
 
         <h4>Q: What if I have extra columns in CSV?</h4>
-        <p>Extra columns are ignored. Only columns matching placeholders are used.</p>
+        <p>Extra columns can supply PDF filenames or group subfolders.</p>
 
         <h4>Q: Can I add images to certificates?</h4>
         <p>Yes! Add images to your Canva template before exporting. They'll appear in all certificates.</p>
-
-        <h4>Q: How many certificates can I generate?</h4>
-        <p>You can generate 100s or 1000s. Processing time depends on quantity and your internet speed.</p>
-
-        <h4>Q: Can I edit certificates after generation?</h4>
-        <p>Yes! PDFs are in your Drive, so you can download and edit them.</p>
 
         <h4>Q: What if generation fails?</h4>
         <p>Check the error message for details. Common issues:</p>
@@ -149,32 +125,22 @@ Bob Johnson,bob@example.com,April 13 2024,Spring Conference</pre>
     <div class="help-section">
         <h3>🆘 Troubleshooting</h3>
 
-        <h4>Error: "Invalid template ID"</h4>
+        <h4>Google Slides Template Link</h4>
         <ul>
-            <li>Check ID is 26+ characters</li>
-            <li>Verify it's from Google Slides (not Docs or Sheets)</li>
-            <li>Try copying the ID again from the URL</li>
+            <li>Paste the full presentation link or choose the presentation using <strong>Select Template from Drive</strong>.</li>
+            <li>Check that the signed-in account can read and copy the presentation.</li>
         </ul>
 
-        <h4>Error: "Missing CSV columns"</h4>
+        <h4>Missing Recipient Columns</h4>
         <ul>
-            <li>Check that each placeholder has a matching CSV column</li>
-            <li>Example: <code>{% raw %}{{Name}}{% endraw %}</code> matches a "Name" column</li>
-            <li>Example: <code>{% raw %}{{email}}{% endraw %}</code> matches an "Email" column</li>
+            <li>Check that the column names match the placeholders. <code>{% raw %}{{Name}}{% endraw %}</code> can use <strong>Participant Name</strong> when <strong>Name</strong> is absent.</li>
+            <li>Matching ignores case, so <code>{% raw %}{{email}}{% endraw %}</code> works with the <strong>Email</strong> column.</li>
         </ul>
 
-        <h4>Certificates not appearing in Drive</h4>
+        <h4>Missing PowerPoint Placeholders After Conversion</h4>
         <ul>
-            <li>Check the output folder name (default: "Certificate Generator")</li>
-            <li>Refresh Google Drive (F5)</li>
-            <li>Check generation completed successfully</li>
-        </ul>
-
-        <h4>Generation is slow</h4>
-        <ul>
-            <li>This is normal! Each certificate takes 15-30 seconds</li>
-            <li>Internet speed affects processing</li>
-            <li>Try during off-peak hours</li>
+            <li>In PowerPoint, type the missing field in a regular text box directly on the certificate slide, then save and upload the file again.</li>
+            <li>Use <strong>Test (First N)</strong> to check the placeholder and layout in the exported PDF.</li>
         </ul>
     </div>
 

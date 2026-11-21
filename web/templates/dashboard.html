@@ -215,9 +215,9 @@
 
     <div class="info-grid">
         <div class="info-card">
-            <h3>📋 CSV Format</h3>
-            <p>Your CSV should have columns matching template placeholders:</p>
-            <pre>Name,Email,Date,Event
+            <h3>📋 Recipient Columns</h3>
+            <p>Match column names to template placeholders. {% raw %}{{Name}}{% endraw %} uses Participant Name when the Name column is absent.</p>
+            <pre>Participant Name,Email,Date,Event
 John Doe,john@example.com,April 13 2024,Conference
 Jane Smith,jane@example.com,April 13 2024,Conference</pre>
         </div>
@@ -225,27 +225,23 @@ Jane Smith,jane@example.com,April 13 2024,Conference</pre>
         <div class="info-card">
             <h3>🎯 Template Requirements</h3>
             <ul>
-                <li>Design certificate in Canva</li>
-                <li>Export as PPTX to Google Drive</li>
-                <li>Open in Google Slides</li>
-                <li>Add {% raw %}{{Placeholder}}{% endraw %} text for dynamic fields</li>
-                <li>Copy Template ID from URL</li>
+                <li>Type editable {% raw %}{{Placeholder}}{% endraw %} text directly on the certificate slide.</li>
+                <li>Upload a local .ppt or .pptx file, or choose a native Google Slides presentation.</li>
             </ul>
         </div>
 
         <div class="info-card">
             <h3>💾 Output Location</h3>
-            <p>Generated PDFs are automatically saved to your Google Drive in the specified folder.</p>
-            <p>No files are stored on our servers—everything stays in your Drive!</p>
+            <p>New batches save to a writable folder at the top level of My Drive. Use <strong>Open output folder</strong> in the results to find the PDFs.</p>
         </div>
 
         <div class="info-card">
             <h3>⚡ How It Works</h3>
             <ol>
                 <li>Sign in with your Google account</li>
-                <li>Upload CSV with participant data</li>
+                <li>Choose recipient data from Drive or upload a file</li>
                 <li>Choose a Google Slides presentation or upload a PowerPoint template</li>
-                <li>Click Generate</li>
+                <li>Run a sample with <strong>Test (First N)</strong> or click <strong>Generate Certificates</strong></li>
                 <li>Certificates appear in your Drive ✓</li>
             </ol>
         </div>

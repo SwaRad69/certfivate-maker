@@ -1,23 +1,21 @@
-# Bulk Certificate Generator
+# Certificate Generator CLI Reference
 
-Generate bulk personalized certificates from a Canva-designed template in Google Slides using a CSV file. This tool automates the process of creating individual PDFs with dynamic placeholders replaced by participant data.
+Generate personalized PDFs in a local folder from a native Google Slides template and a recipient file. To upload a PowerPoint template or save PDFs to Google Drive, use the [web app](WEB_QUICK_START.md).
 
 ## Features
 
-**Canva → Google Slides Workflow** — Design in Canva, export to Google Slides, add dynamic placeholders  
-**Dynamic Placeholder Detection** — Auto-detects `{{Placeholder}}` patterns in your slide  
-**CSV-Driven Generation** — Read participant data from CSV, generate one PDF per row  
-**Resume on Failure** — Checkpoint system lets you resume if generation is interrupted  
-**Bulk Export** — Generate 100–500+ certificates reliably in one run  
-**Comprehensive Logging** — Full logs to file + console, detailed error messages  
+- Detects editable `{{Placeholder}}` fields in the Google Slides template.
+- Reads recipient data from local files and generates one PDF per row.
+- Uses a checkpoint to resume interrupted runs.
+- Writes logs to the console and the output folder.
 
 ## Prerequisites
 
 - **Google Cloud Project** with Google Drive & Slides APIs enabled
 - **Service Account** with credentials (`credentials.json`)
 - **Google Slides Template** with dynamic placeholders
-- **Python 3.8+**
-- **CSV file** with participant data
+- **Python 3.11**
+- A supported [recipient file](FILE_CONVERTER_GUIDE.md)
 
 See [SETUP_GUIDE.md](SETUP_GUIDE.md) for detailed setup instructions.
 
@@ -49,9 +47,10 @@ python main.py --csv participants.csv --template TEMPLATE_ID --output ./certific
 
 | Argument | Required | Description | Example |
 |----------|----------|-------------|---------|
-| `--csv` | ✓ | Path to CSV file | `participants.csv` |
+| `--csv` | ✓ | Path to a supported recipient file | `participants.xlsx` |
 | `--template` | ✓ | Google Slides template ID | `1abc2def3ghi4jkl5mno6pqr` |
 | `--output` | | Output folder (default: `./certificates`) | `./my-certs` |
+| `--group-by-column` | | Put PDFs in subfolders by column value. Blank values stay in the main output folder. | `Team` |
 | `--creds` | | Credentials path (default: `./credentials.json`) | `./my-creds.json` |
 | `--cleanup` | | Delete temp slides after success | *(flag)* |
 | `--verbose` | | Enable debug logging | *(flag)* |
@@ -87,7 +86,7 @@ python main.py --csv data.csv --template 1abc2def3ghi4jkl5mno6pqr --verbose
 
 ## CSV Format
 
-Create a CSV file with headers matching your placeholders. **At minimum, include a `Name` column** (used as the PDF filename).
+Create a CSV or another supported recipient file with headers matching your placeholders. Filenames use `Name` first and `Participant Name` when the `Name` column is absent.
 
 ### Example CSV (`participants.csv`)
 
@@ -100,9 +99,8 @@ Bob Johnson,bob@example.com,2024-04-13,Spring Conference
 
 **Rules:**
 - First row is header row
-- Column names must match placeholder names (case-sensitive)
-- Use `Name` column for PDF filenames
-- Extra CSV columns not in the slide are safely ignored
+- Match column and placeholder names without regard to case. `{{Name}}` falls back to `Participant Name` when `Name` is absent.
+- Extra recipient columns can be used for grouping.
 - Missing columns will cause an error (see validation)
 
 ## Placeholder Syntax
@@ -118,7 +116,7 @@ In your Google Slides template, create text boxes with placeholder syntax:
 
 **Key Rules:**
 1. Placeholders use double curly braces: `{{FieldName}}`
-2. Field names are case-sensitive and must match CSV column headers
+2. Field names match recipient column headers without regard to case
 3. Placeholders can be anywhere in the slide (text boxes, shapes, tables)
 4. Each placeholder is replaced independently
 
@@ -154,7 +152,7 @@ Email: {{Email}}
 1. Click on each text element that needs dynamic content
 2. Replace text with `{{FieldName}}`
 3. Use column names from your CSV as field names
-4. **Important:** Placeholders MUST be created in Google Slides, not Canva
+4. Verify that each placeholder is editable in the native Google Slides template.
 
 ### Step 4: Get Template ID
 1. Open your template presentation in Google Slides
@@ -165,7 +163,7 @@ Email: {{Email}}
 
 ### Step 5: Prepare CSV
 1. Create a CSV with columns matching your placeholders
-2. Include at least a `Name` column for PDF filenames
+2. Use `Name` or `Participant Name` for recipient-based filenames.
 
 ### Step 6: Generate Certificates
 ```bash
@@ -174,7 +172,7 @@ python main.py --csv participants.csv --template {TEMPLATE_ID} --output ./certif
 
 ### Step 7: Download PDFs
 - All PDFs saved to `./certificates/` (or specified `--output` folder)
-- Each file named: `{Name}.pdf`
+- The app uses a generated filename when neither name column is available.
 
 ## Output
 
@@ -251,7 +249,7 @@ python main.py --csv data.csv --template ID --output ./certs
 
 **6. "No placeholders detected in template"**
    - Verify placeholders use correct syntax: `{{FieldName}}`
-   - Check spelling and case match CSV columns exactly
+   - Check that each placeholder spelling matches a recipient column.
    - Run with `--verbose` to see detected placeholders
 
 **7. Script was interrupted, how do I resume?**
@@ -285,30 +283,9 @@ Get-Content certificates/certificate_generator.log -Wait  # Windows PowerShell
 tail -f certificates/certificate_generator.log              # Linux/Mac
 ```
 
-## Performance
+## Runtime and Google API limits
 
-- **Speed:** ~10–30 seconds per certificate (depends on Google Drive latency)
-- **Batch Examples:**
-  - 10 certificates: ~3–5 minutes
-  - 50 certificates: ~10–20 minutes
-  - 100 certificates: ~20–50 minutes
-  - 500 certificates: ~2–3 hours
-
-To speed up:
-- Ensure stable internet connection
-- Run during off-peak hours (lower API load)
-- Use `--cleanup` to auto-delete temp slides (saves cleanup time later)
-
-## API Limits & Rate Limiting
-
-Google APIs have rate limits:
-- **Drive API:** 10,000 requests/day (usually not hit)
-- **Slides API:** Similar limits per quota unit
-
-If you hit limits:
-- Wait 1–2 hours before retrying
-- Resume your batch with the same command
-- Consider breaking large batches into smaller runs
+Runtime depends on the number of recipients, template complexity, and Google API response times. If Google rate-limits the run, retry with the same command after the limit clears so the checkpoint skips completed rows.
 
 ## Features Details
 
@@ -345,20 +322,16 @@ The system creates temporary copies of your template:
 - Scopes limited to Drive + Slides APIs
 
 **File Permissions:**
-- Share template with service account email (read-only is sufficient)
+- Give the service account permission to read and copy the template and to create files in its Drive folder.
 - Output folder must be writable by your user
 - Temp slides created in same folder as template
 
-**Data Privacy:**
-- CSV data stays local (not uploaded anywhere)
-- Only template + replacements sent to Google
-- PDFs downloaded to your output folder
+The CLI reads the recipient file locally and sends replacement values to the Google Slides API. It downloads the exported PDFs to the local output folder.
 
 ## Version & Support
 
-- **Python:** 3.8+
+- **Python:** 3.11
 - **Dependencies:** See `requirements.txt`
-- **Last Updated:** 2024-04-13
 
 ## License
 
