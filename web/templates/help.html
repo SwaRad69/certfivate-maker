@@ -9,13 +9,10 @@
     <div class="help-section">
         <h3>📚 Quick Start</h3>
         <ol>
-            <li><strong>Design certificate</strong> in Canva with your branding</li>
-            <li><strong>Export to Google Drive</strong> as PPTX file</li>
-            <li><strong>Open in Google Slides</strong> and add {% raw %}{{Placeholder}}{% endraw %} text</li>
-            <li><strong>Get Template ID</strong> from Google Slides URL</li>
-            <li><strong>Create CSV file</strong> with participant data</li>
-            <li><strong>Upload to this app</strong> and click Generate</li>
-            <li><strong>Download from Drive</strong> in the output folder</li>
+            <li>Add editable {% raw %}{{Placeholder}}{% endraw %} text to your certificate design.</li>
+            <li>Upload a .pptx or .ppt file from your computer, or choose a Google Slides presentation.</li>
+            <li>Choose your participant data and click <strong>Generate Certificates</strong>.</li>
+            <li>Open the output folder in Google Drive to find the PDFs.</li>
         </ol>
     </div>
 
@@ -31,14 +28,11 @@
     </div>
 
     <div class="help-section">
-        <h3>🔗 Prepare Template in Google Slides</h3>
+        <h3>Prepare Your Template</h3>
         <ol>
-            <li>Upload your PPTX to Google Drive</li>
-            <li>Right-click → Open with → Google Slides</li>
-            <li>Google auto-converts it for you</li>
-            <li>Click on each text field that needs dynamic content</li>
-            <li>Replace with placeholders like: <code>{% raw %}{{Name}}{% endraw %}</code>, <code>{% raw %}{{Email}}{% endraw %}</code>, etc.</li>
-            <li>After importing from Canva, check that each placeholder displays correctly in Google Slides.</li>
+            <li>Open your certificate design in PowerPoint or Google Slides.</li>
+            <li>Use editable text boxes for placeholders such as <code>{% raw %}{{Name}}{% endraw %}</code> and <code>{% raw %}{{Email}}{% endraw %}</code>.</li>
+            <li>For a PowerPoint file, choose <strong>Upload from computer</strong> on the dashboard. The app converts it to Google Slides when generation starts.</li>
         </ol>
 
         <h4>Placeholder Syntax</h4>
@@ -63,14 +57,14 @@ Bob Johnson,bob@example.com,April 13 2024,Spring Conference</pre>
         <h4>Rules:</h4>
         <ul>
             <li>First row must be column headers</li>
-            <li>Column names must match placeholder names. Capitalization is ignored.</li>
+            <li>Match column names to placeholder names regardless of capitalization. {% raw %}{{Name}}{% endraw %} uses <strong>Participant Name</strong> when there is no <strong>Name</strong> column.</li>
             <li>Each row = one certificate to generate</li>
-            <li>Use <strong>Name</strong> column for PDF filename</li>
+            <li>PDF filenames default to <strong>Name</strong> or <strong>Participant Name</strong>.</li>
         </ul>
     </div>
 
     <div class="help-section">
-        <h3>🎯 Get Your Template ID</h3>
+        <h3>Find a Google Slides Template ID</h3>
         <ol>
             <li>Open your template in Google Slides</li>
             <li>Look at the URL in address bar:</li>
@@ -85,7 +79,7 @@ Bob Johnson,bob@example.com,April 13 2024,Spring Conference</pre>
         <ol>
             <li>Click "Generate Certificates" button on dashboard</li>
             <li>Upload your CSV file</li>
-            <li>Paste your template ID</li>
+            <li>Upload a PowerPoint template or select a Google Slides presentation</li>
             <li>Optional: Change output folder name (default: "Certificate Generator")</li>
             <li>Click "Generate"</li>
             <li>Wait for completion (takes ~15-30 seconds per certificate)</li>

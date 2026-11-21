@@ -12,6 +12,25 @@ from googleapiclient.http import MediaIoBaseUpload
 from config import PDF_MIME_TYPE, SLIDES_MIME_TYPE
 
 
+FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder'
+
+
+def can_add_drive_children(folder):
+    return folder.get('capabilities', {}).get('canAddChildren') is True
+
+
+def drive_parent_denied(error):
+    return isinstance(error, HttpError) and error.resp.status == 403 and any(
+        detail.get('reason') == 'insufficientParentPermissions'
+        for detail in (error.error_details or ()) if isinstance(detail, dict)
+    )
+
+
+class DriveDestinationError(RuntimeError):
+    def __init__(self, folder_name):
+        super().__init__(f'Google Drive cannot save files to "{folder_name}".')
+
+
 def content_digest(value):
     data = json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
     return hashlib.sha256(data).hexdigest()
@@ -65,7 +84,7 @@ class DriveBatch:
 
     def create(
         self, *, identity, input_rows, rows, snapshot_id, template_metadata, placeholders,
-        folder_id, folder_name, group_folders=None,
+        folder_id, folder_name, group_folders=None, powerpoint_identity=None,
     ):
         group_folders = group_folders or {}
         new_folders = sum(existing_id is None for existing_id in group_folders.values())
@@ -89,6 +108,8 @@ class DriveBatch:
                 name: {'id': existing_id or next(folder_ids), 'create': existing_id is None}
                 for name, existing_id in group_folders.items()
             }
+        if powerpoint_identity:
+            manifest['powerpoint_template'] = powerpoint_identity
         media = MediaIoBaseUpload(
             BytesIO(json.dumps(manifest).encode('utf-8')), mimetype='application/json'
         )
@@ -113,31 +134,41 @@ class DriveBatch:
         return manifest
 
     def ensure_output_folder(self):
-        folder_id = self.manifest['folder_id']
-        if self.manifest['create_folder']:
-            self._ensure_folder(folder_id, self.manifest['output_folder'])
-        return folder_id
+        return self._ensure_folder(
+            self.manifest['folder_id'], self.manifest['output_folder'],
+            create=self.manifest['create_folder'],
+        )
 
     def ensure_group_folder(self, name):
         folder = self.manifest['group_folders'][name]
-        if folder['create']:
-            self._ensure_folder(folder['id'], name, parent_id=self.manifest['folder_id'])
-        return folder['id']
+        return self._ensure_folder(
+            folder['id'], name, create=folder['create'], parent_id=self.manifest['folder_id'],
+        )
 
-    def _ensure_folder(self, folder_id, name, *, parent_id=None):
-        if self._get_file(folder_id, 'id,trashed') is None:
+    def _ensure_folder(self, folder_id, name, *, create, parent_id='root'):
+        fields = 'mimeType,trashed,capabilities(canAddChildren)'
+        folder = self._get_file(folder_id, fields)
+        if folder is None and create:
             body = {
                 'id': folder_id,
                 'name': name,
-                'mimeType': 'application/vnd.google-apps.folder',
+                'mimeType': FOLDER_MIME_TYPE,
+                'parents': [parent_id],
             }
-            if parent_id:
-                body['parents'] = [parent_id]
             try:
-                self.files.create(body=body, fields='id').execute()
+                self.files.create(body=body, fields='id', supportsAllDrives=True).execute()
             except HttpError as error:
+                if drive_parent_denied(error):
+                    raise DriveDestinationError(name) from error
                 if not _drive_conflict(error):
                     raise
+                folder = self._get_file(folder_id, fields)
+            else:
+                return folder_id
+        if (not folder or folder.get('trashed') or folder.get('mimeType') != FOLDER_MIME_TYPE
+                or not can_add_drive_children(folder)):
+            raise DriveDestinationError(name)
+        return folder_id
 
     def properties(self, row_index):
         return {'certificateBatch': self.batch_id, 'certificateRow': str(row_index)}
@@ -239,6 +270,7 @@ class DriveBatch:
             'pending_rows': total - attempted,
             'errors': [self.failures[index] for index in sorted(failed)],
             'output_folder': self.manifest['output_folder'],
+            'output_folder_id': self.manifest['folder_id'],
         }
 
 

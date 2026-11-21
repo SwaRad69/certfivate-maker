@@ -19,6 +19,7 @@ function mockElement(id) {
         id,
         style: {},
         value: '',
+        dataset: {},
         children: [],
         disabled: false,
         hidden: false,
@@ -75,6 +76,7 @@ function dashboard({ generate, request, storage = new Map() } = {}) {
     elements.testCount.value = '10';
     elements.csvFile.accept = '.csv,.txt,.tsv,.xlsx,.xls,.ods,.json,.jsonl';
     elements.csvFile.files = [];
+    elements.templateFile.files = [];
     elements['sheets-tab'].classList.add('active');
     const tabs = ['sheets', 'csv'].map(tabName => Object.assign(
         mockElement(tabName), { tabName, dataset: { tab: tabName } }
@@ -111,6 +113,8 @@ function dashboard({ generate, request, storage = new Map() } = {}) {
         Blob,
         URL,
         AbortController,
+        setTimeout,
+        clearTimeout,
         localStorage: {
             get length() { return storage.size; },
             key: index => [...storage.keys()][index] ?? null,
@@ -367,6 +371,43 @@ test('one Generate click continues across work windows with the same batch and s
     assert.match(view.element('progressText').textContent, /3 saved, 1 remaining/);
     assert.equal(view.results.at(-1)[0].status, 'completed');
     assert.equal(view.storage.has(savedBatchKey), false);
+});
+
+test('PowerPoint submits the local template once and keeps its filename choice after reload', async () => {
+    let attempts = 0;
+    const view = dashboard({
+        generate: async () => {
+            const summary = { pending_rows: 3, created_pdfs: 0, interrupted: ++attempts === 2 };
+            return { status: 202, json: async () => ({ status: 'pending', summary }) };
+        },
+    });
+    view.drive('Name,Code\nAda,A1');
+    view.driveHeaders(['Name', 'Code']);
+    view.element('powerpointTemplateSource').checked = true;
+    await view.element('powerpointTemplateSource').dispatch('change');
+    assert.equal(view.element('slidesTemplateFields').hidden, true);
+    assert.equal(view.element('powerpointTemplateFields').hidden, false);
+    assert.deepEqual(view.element('filenameField').children.map(option => option.value), ['', 'Name', 'Code']);
+    view.element('filenameField').value = 'Code';
+    view.element('templateFile').files = [new File(['PowerPoint content'], 'Awards.pptx')];
+    await view.submit();
+
+    const [first, continued] = view.postCalls().map(call => call.options.body);
+    assert.equal(first.get('template_file').name, 'Awards.pptx');
+    assert.equal(first.get('template_source'), 'powerpoint');
+    assert.equal(first.has('template_id'), false);
+    assert.equal(continued.get('batch_id'), first.get('batch_id'));
+    assert.equal(continued.has('template_file'), false);
+
+    const reloaded = dashboard({ storage: view.storage });
+    reloaded.drive('Name,Code\nAda,A1');
+    await reloaded.element('resumeBatchBtn').dispatch('click');
+    const resumed = reloaded.postCalls()[0].options.body;
+    assert.equal(resumed.get('template_source'), 'powerpoint');
+    assert.equal(resumed.get('filename_field'), 'Code');
+    assert.equal(resumed.has('template_file'), false);
+    assert.equal(resumed.has('template_id'), false);
+    assert.equal(resumed.get('retry_failed'), 'true');
 });
 
 test('a Drive interruption stays recoverable with either server response format', async () => {

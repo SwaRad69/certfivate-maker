@@ -30,7 +30,13 @@ import google.auth
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from generator import generate_certificates_oauth2, read_web_template, recover_web_batch, reserve_web_batch
+from generator import (
+    PowerPointTemplate,
+    generate_certificates_oauth2,
+    read_web_template,
+    recover_web_batch,
+    reserve_web_batch,
+)
 from web.file_converter import (
     get_supported_formats,
     parse_rows,
@@ -448,9 +454,12 @@ def generation_response(summary, input_rows=None, output_folder=None):
         status, code = 'completed', 200
         message = f'Generated {created} certificates successfully.'
 
+    destination_error = summary.get('destination_error')
+    if destination_error:
+        message = destination_error
     result = {'success': status == 'completed', 'status': status, 'message': message, 'summary': summary}
     if code >= 400:
-        result['error'] = errors[0] if errors else message
+        result['error'] = destination_error or (errors[0] if errors else message)
     if summary.get('batch_id'):
         result['batch_id'] = summary['batch_id']
     if output_folder is not None:
@@ -506,10 +515,7 @@ def api_recover_generation_batch(token):
 @app.route('/api/generate', methods=['POST'])
 @login_required
 def api_generate():
-    """
-    API endpoint to generate certificates.
-    Processes either CSV file or Google Sheets URL with template ID.
-    """
+    """Generate certificates from recipient data and a Slides or PowerPoint template."""
     try:
         # Get credentials from session
         creds_data = session.get('credentials')
@@ -523,11 +529,6 @@ def api_generate():
             creds.refresh(GoogleRequest())
             _save_session_credentials(creds)
         
-        # Get form data
-        try:
-            template_id = _extract_template_id(request.form.get('template_id'))
-        except ValueError as error:
-            return invalid_generation_response(str(error))
         output_folder = request.form.get('output_folder', '').strip() or 'Certificate Generator'
         filename_field = request.form.get('filename_field') or 'Name'
         batch_token = request.form.get('batch_id', '').strip()
@@ -537,7 +538,26 @@ def api_generate():
                 batch_id = _batch_signer().loads(batch_token)
             except BadSignature:
                 return invalid_generation_response('Invalid generation batch ID.')
-        
+
+        slides_input = request.form.get('template_id', '').strip()
+        template_files = [file for file in request.files.getlist('template_file') if file.filename]
+        use_powerpoint = bool(template_files) or request.form.get('template_source') == 'powerpoint'
+        if len(template_files) > 1 or (slides_input and use_powerpoint):
+            return invalid_generation_response('Choose one template: a Google Slides presentation or one PowerPoint file.')
+        template_id = None
+        powerpoint_template = None
+        try:
+            if template_files:
+                file = template_files[0]
+                powerpoint_template = PowerPointTemplate.from_upload(file.filename, file.stream)
+            elif use_powerpoint:
+                if not batch_id:
+                    raise ValueError('Choose a .pptx or .ppt template to upload.')
+            else:
+                template_id = _extract_template_id(slides_input)
+        except ValueError as error:
+            return invalid_generation_response(str(error))
+
         uploads = [file for file in request.files.getlist('csv_file') if file.filename]
         has_sheets = bool(
             request.form.get('sheets_id')
@@ -583,7 +603,7 @@ def api_generate():
         try:
             # Generate certificates with user's credentials
             logger.info(f"Starting certificate generation for {session.get('user_email', 'unknown')}")
-            logger.info(f"  Template ID: {template_id}")
+            logger.info("  Template: %s", template_id or 'PowerPoint upload')
             logger.info(f"  Output folder: {output_folder}")
             
             summary = generate_certificates_oauth2(
@@ -597,6 +617,7 @@ def api_generate():
                 input_rows=input_rows,
                 batch_id=batch_id,
                 retry_failed=request.form.get('retry_failed') == 'true',
+                powerpoint_template=powerpoint_template,
             )
             if batch_token:
                 summary['batch_id'] = batch_token

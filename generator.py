@@ -4,12 +4,18 @@ Handles Google API interactions, template copying, text replacement, and PDF exp
 """
 
 import logging
+import re
 import tempfile
 import time
 from collections import Counter
+from dataclasses import dataclass
+from hashlib import file_digest
 from io import BytesIO
-from typing import Dict, List, Tuple, Set
+from typing import BinaryIO, Dict, List, Tuple, Set
 from pathlib import Path
+from xml.etree import ElementTree
+from zipfile import BadZipFile, ZipFile
+from zlib import error as ZipDataError
 
 from google.oauth2.service_account import Credentials
 from google.auth.transport.requests import Request
@@ -20,8 +26,12 @@ from googleapiclient.http import MediaIoBaseUpload
 import config
 from batch import (
     DriveBatch,
+    DriveDestinationError,
+    FOLDER_MIME_TYPE,
+    can_add_drive_children,
     content_digest,
     delete_temp_slide,
+    drive_parent_denied,
     drive_query_value,
     reserve_drive_ids,
 )
@@ -106,8 +116,32 @@ def get_presentation_metadata(slides_service, presentation_id: str) -> Dict:
         raise
 
 
+def _field_name(value):
+    value = config.PLACEHOLDER_FORMATTING.sub('', value)
+    return value.replace('\u00a0', ' ').replace('\u202f', ' ').strip().lower()
+
+
 def _placeholder_name(match):
-    return match.group(1).lower().strip("\"'")
+    return _field_name(match.group(1)).strip("\"'").strip()
+
+
+def _source_field(field, columns):
+    if field == 'name' and field not in columns and 'participant name' in columns:
+        return 'participant name'
+    return field
+
+
+def _record_fields(row):
+    return {_field_name(key): str(value) for key, value in row.items()}
+
+
+def _row_replacements(fields, placeholders):
+    replacements = {}
+    for name in placeholders:
+        source = _source_field(name, fields)
+        if source in fields:
+            replacements[name] = fields[source]
+    return replacements
 
 
 def _slide_text_elements(page_elements):
@@ -201,18 +235,17 @@ def validate_csv_placeholders(csv_rows: List[Dict], detected_placeholders: Set[s
     if not csv_rows:
         return False, ["CSV is empty"]
     
-    csv_columns = set(csv_rows[0].keys())
-    # Normalize CSV column names to lowercase for comparison
-    csv_columns_lower = {col.lower() for col in csv_columns}
+    csv_fields = {_field_name(col) for col in csv_rows[0]}
+    source_fields = {name: _source_field(name, csv_fields) for name in detected_placeholders}
     issues = []
     
     # Check for missing columns (case-insensitive)
-    missing = detected_placeholders - csv_columns_lower
+    missing = {name for name, source in source_fields.items() if source not in csv_fields}
     if missing:
         issues.append(f"Missing CSV columns for placeholders: {missing}")
     
     # Warn about unused columns (case-insensitive)
-    unused = csv_columns_lower - detected_placeholders
+    unused = csv_fields - set(source_fields.values())
     if unused:
         logging.warning(f"CSV columns not used in slide: {unused}")
     
@@ -333,7 +366,7 @@ def _replace_and_verify(presentations, presentation_id, replacements):
         return
 
     values = {
-        key.lower(): str(value).replace('\r\n', '\n').replace('\r', '\n')
+        _field_name(key): str(value).replace('\r\n', '\n').replace('\r', '\n')
         for key, value in replacements.items()
     }
     missing = Counter(_placeholder_name(match) for match in matches if _placeholder_name(match) not in values)
@@ -455,7 +488,7 @@ def read_web_template(drive_service, slides_service, template_id):
         if metadata.get('trashed'):
             raise ValueError('This template is in Google Drive Trash. Restore it or choose another presentation.')
         if metadata.get('mimeType', config.SLIDES_MIME_TYPE) != config.SLIDES_MIME_TYPE:
-            raise ValueError('Choose a native Google Slides presentation. Convert PowerPoint files in Google Slides first.')
+            raise ValueError('Choose a Google Slides presentation or upload a .pptx or .ppt file from your computer.')
         if metadata.get('capabilities', {}).get('canCopy') is False:
             raise ValueError('Google Drive blocks copying this presentation. Ask the owner to allow copying.')
         return metadata, detect_placeholders_in_slide(slides_service, template_id)
@@ -546,9 +579,110 @@ def _group_values(records, column):
     return [str(row[column]).strip() if row.get(column) is not None else '' for row in records]
 
 
+POWERPOINT_MIME_TYPES = {
+    '.ppt': 'application/vnd.ms-powerpoint',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+}
+PPTX_SLIDE_PART = re.compile(r'ppt/(slides/slide|slideMasters/slideMaster|slideLayouts/slideLayout)\d+\.xml')
+DRAWINGML = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
+
+
+class _PowerPointTextTree(ElementTree.TreeBuilder):
+    def doctype(self, name, public_id, system_id):
+        raise ElementTree.ParseError('Unexpected doctype in a PowerPoint slide')
+
+
+@dataclass(frozen=True)
+class PowerPointTemplate:
+    stream: BinaryIO
+    mime_type: str
+    identity: str
+
+    @classmethod
+    def from_upload(cls, filename, stream):
+        mime_type = POWERPOINT_MIME_TYPES.get(Path(filename).suffix.lower())
+        if not mime_type:
+            raise ValueError('Choose a PowerPoint template with a .pptx or .ppt extension.')
+        if not stream.read(1):
+            raise ValueError('The selected PowerPoint template is empty.')
+        stream.seek(0)
+        digest = file_digest(stream, 'sha256').hexdigest()
+        stream.seek(0)
+        return cls(stream, mime_type, f'powerpoint:{mime_type}:{digest}')
+
+
+def _import_powerpoint_template(files, template, batch_id):
+    metadata = {
+        'name': 'Certificate generation template snapshot',
+        'mimeType': config.SLIDES_MIME_TYPE,
+        'parents': ['root'],
+    }
+    if batch_id:
+        metadata['appProperties'] = {'certificateBatch': batch_id}
+    media = MediaIoBaseUpload(template.stream, mimetype=template.mime_type, resumable=True)
+    try:
+        return files.create(body=metadata, media_body=media, fields='id').execute()['id']
+    except HttpError as error:
+        if error.resp.status == 413:
+            raise ValueError('The PowerPoint file is too large to convert. Reduce the file size and upload it again.') from error
+        if error.resp.status in (400, 415, 422):
+            raise ValueError(
+                'Google Drive could not convert this PowerPoint file. Open it in PowerPoint and save a new .pptx copy.'
+            ) from error
+        raise
+
+
+def _pptx_source_placeholders(stream):
+    """Read text in slide and layout parts without extracting the PowerPoint archive."""
+    slide_names, layout_names = set(), set()
+    remaining_bytes = 8 * 1024 * 1024  # Bound the source inspection independently of conversion.
+    try:
+        stream.seek(0)
+        with ZipFile(stream) as archive:
+            for part in archive.infolist():
+                match = PPTX_SLIDE_PART.fullmatch(part.filename)
+                if not match or part.file_size > remaining_bytes:
+                    continue
+                remaining_bytes -= part.file_size
+                try:
+                    slide = ElementTree.fromstring(
+                        archive.read(part), parser=ElementTree.XMLParser(target=_PowerPointTextTree()),
+                    )
+                except (ElementTree.ParseError, BadZipFile, ZipDataError):
+                    continue
+                names = slide_names if match[1] == 'slides/slide' else layout_names
+                for paragraph in slide.iter(DRAWINGML + 'p'):
+                    text = ''.join(run.text or '' for run in paragraph.iter(DRAWINGML + 't'))
+                    names.update(_placeholder_name(token) for token in config.PLACEHOLDER_PATTERN.finditer(text))
+    except (BadZipFile, OSError, NotImplementedError, RuntimeError):
+        return set(), set()
+    finally:
+        stream.seek(0)
+    return slide_names, layout_names
+
+
+def _validate_powerpoint_placeholders(template, detected):
+    source, layout = set(), set()
+    if template.mime_type == POWERPOINT_MIME_TYPES['.pptx']:
+        source, layout = _pptx_source_placeholders(template.stream)
+    missing = source - detected
+    if missing:
+        tokens = ', '.join('{{' + name + '}}' for name in sorted(missing))
+        raise ValueError(
+            f'Google Slides conversion did not preserve {tokens} as editable slide text. '
+            'Type the missing placeholders in a regular text box on the certificate slide and upload it again.'
+        )
+    if not detected:
+        location = 'Found placeholder text in the Slide Master or a layout. ' if layout else ''
+        raise ValueError(
+            f'{location}No editable placeholders were found on the certificate slide after conversion. '
+            'In PowerPoint, insert a regular text box on the slide and type {{Name}}.'
+        )
+
+
 def generate_certificates_oauth2(
     csv_content: str | None,
-    template_id: str,
+    template_id: str | None,
     output_folder: str,
     user_credentials,
     filename_field: str = 'Name',
@@ -559,66 +693,82 @@ def generate_certificates_oauth2(
     batch_id=None,
     retry_failed=False,
     work_seconds=WEB_BATCH_WORK_SECONDS,
+    powerpoint_template: PowerPointTemplate | None = None,
 ) -> Dict:
     """Generate Drive PDFs, optionally resuming a durable, time-bounded batch."""
     if records is None:
         records = parse_csv(csv_content)[1]
     if not records:
         raise ValueError("The selected data source has no certificate records.")
+    if template_id is not None and powerpoint_template is not None:
+        raise ValueError('Choose either a Google Slides presentation or a PowerPoint upload.')
 
     input_rows = len(records) if input_rows is None else input_rows
+    filename_key = _field_name(filename_field)
     group_values = _group_values(records, group_by_column)
     group_names = dict.fromkeys(value for value in group_values if value)
-    identity_parts = [template_id, output_folder, filename_field, input_rows, records]
-    if group_by_column:
-        identity_parts.append(group_by_column)
-    identity = content_digest(identity_parts)
     deadline = time.monotonic() + work_seconds if batch_id else float('inf')
     slides_service = build('slides', config.SLIDES_API_VERSION, credentials=user_credentials)
     drive_service = _drive_service(user_credentials)
     files = drive_service.files()
     batch = DriveBatch(files, batch_id) if batch_id else None
     manifest = batch.load() if batch else None
-    template_metadata = None
-    group_folders = {}
-
-    if manifest is None:
-        template_metadata, detected_placeholders = read_web_template(drive_service, slides_service, template_id)
-        is_valid, issues = validate_csv_placeholders(records, detected_placeholders)
-        if not is_valid:
-            return {
-                'input_rows': input_rows, 'total': len(records), 'attempted_rows': 0,
-                'success': 0, 'failed': 0, 'skipped': 0, 'created_pdfs': 0,
-                'validation_failed': True, 'errors': issues,
-            }
-        # In grouped batches, resolve the main folder at the root so a group
-        # with the same name can never be selected as the main folder.
-        parent_id = 'root' if group_by_column else None
-        folder_id = _find_drive_folder(drive_service, output_folder, parent_id=parent_id)
-        existing_groups = _find_group_folders(files, folder_id, group_names) if folder_id and group_names else {}
-        if batch:
-            snapshot_id = _snapshot_web_template(drive_service, template_id, template_metadata, batch_id)
-            manifest = batch.create(
-                identity=identity, input_rows=input_rows, rows=len(records),
-                snapshot_id=snapshot_id,
-                template_metadata=template_metadata, placeholders=detected_placeholders,
-                folder_id=folder_id,
-                folder_name=output_folder,
-                group_folders={name: existing_groups.get(name) for name in group_names},
-            )
-            if manifest['snapshot_id'] != snapshot_id:
-                delete_temp_slide(files, snapshot_id)
+    powerpoint_identity = None
+    if template_id is None:
+        if powerpoint_template:
+            powerpoint_identity = powerpoint_template.identity
+        elif manifest and manifest.get('powerpoint_template'):
+            powerpoint_identity = manifest['powerpoint_template']
         else:
-            folder_id = folder_id or _create_drive_folder(files, output_folder)
-            group_folders = existing_groups
-
-    if batch and manifest['identity'] != identity:
+            raise ValueError('Choose the original PowerPoint file to start or resume this batch.')
+    identity_parts = [powerpoint_identity or template_id, output_folder, filename_field, input_rows, records]
+    if group_by_column:
+        identity_parts.append(group_by_column)
+    identity = content_digest(identity_parts)
+    if manifest and manifest['identity'] != identity:
         raise ValueError("The data, template, or output settings differ from the original batch.")
 
+    template_metadata = None
+    group_folders = {}
+    folder_id = None
+    imported_id = None
+    publishing_manifest = False
     cleanup_pending = False
+    success = 0
+    errors = []
     try:
-        success = 0
-        errors = []
+        if manifest is None:
+            if powerpoint_template:
+                imported_id = template_id = _import_powerpoint_template(files, powerpoint_template, batch_id)
+            template_metadata, detected_placeholders = read_web_template(drive_service, slides_service, template_id)
+            if powerpoint_template:
+                _validate_powerpoint_placeholders(powerpoint_template, detected_placeholders)
+            is_valid, issues = validate_csv_placeholders(records, detected_placeholders)
+            if not is_valid:
+                return {
+                    'input_rows': input_rows, 'total': len(records), 'attempted_rows': 0,
+                    'success': 0, 'failed': 0, 'skipped': 0, 'created_pdfs': 0,
+                    'validation_failed': True, 'errors': issues,
+                }
+            folder_id = _find_drive_folder(files, output_folder)
+            existing_groups = _find_group_folders(files, folder_id, group_names) if folder_id and group_names else {}
+            if batch:
+                snapshot_id = imported_id or _snapshot_web_template(drive_service, template_id, template_metadata, batch_id)
+                publishing_manifest = True
+                manifest = batch.create(
+                    identity=identity, input_rows=input_rows, rows=len(records),
+                    snapshot_id=snapshot_id, powerpoint_identity=powerpoint_identity,
+                    template_metadata=template_metadata, placeholders=detected_placeholders,
+                    folder_id=folder_id, folder_name=output_folder,
+                    group_folders={name: existing_groups.get(name) for name in group_names},
+                )
+                if not imported_id and manifest['snapshot_id'] != snapshot_id:
+                    delete_temp_slide(files, snapshot_id)
+                if manifest['identity'] != identity:
+                    raise ValueError("The data, template, or output settings differ from the original batch.")
+            else:
+                group_folders = existing_groups
+
         candidates = range(len(records))
         if batch:
             batch.refresh_outcomes()
@@ -633,6 +783,8 @@ def generate_certificates_oauth2(
             template_metadata = manifest['template']
             detected_placeholders = set(manifest['placeholders'])
             folder_id = batch.ensure_output_folder()
+        else:
+            folder_id = folder_id or _create_drive_folder(files, output_folder)
 
         for row_idx in candidates:
             if time.monotonic() >= deadline:
@@ -644,17 +796,17 @@ def generate_certificates_oauth2(
             if batch and not retry_failed and batch.existing_failure(row_idx):
                 continue
 
-            filename = next(
-                (str(value) for key, value in row.items() if key.lower() == filename_field.lower()),
-                '',
-            ) or f'certificate_{row_idx}'
-            replacements = {
-                key.lower(): str(value)
-                for key, value in row.items()
-                if key.lower() in detected_placeholders
-            }
+            fields = _record_fields(row)
+            filename = fields.get(_source_field(filename_key, fields)) or f'certificate_{row_idx}'
+            replacements = _row_replacements(fields, detected_placeholders)
             temp_slide_id = None
             try:
+                group = group_values[row_idx]
+                if group and group not in group_folders:
+                    group_folders[group] = (
+                        batch.ensure_group_folder(group) if batch
+                        else _create_drive_folder(files, group, parent_id=folder_id)
+                    )
                 temp_slide_id = duplicate_slide_template(
                     drive_service, template_id, row_idx, template_metadata=template_metadata,
                     batch_properties=batch.properties(row_idx) if batch else {},
@@ -666,22 +818,19 @@ def generate_certificates_oauth2(
                     slides_service, temp_slide_id, replacements, raise_on_failure=True
                 ):
                     raise RuntimeError("Text replacement failed.")
-                group = group_values[row_idx]
-                if group and group not in group_folders:
-                    group_folders[group] = (
-                        batch.ensure_group_folder(group) if batch
-                        else _create_drive_folder(files, group, parent_id=folder_id)
-                    )
                 if not export_slide_to_pdf_drive(
                     drive_service, temp_slide_id, filename, group_folders.get(group, folder_id),
                     file_id=batch.manifest['pdf_ids'][row_idx] if batch else None,
                     app_properties=batch.properties(row_idx) if batch else None,
                     raise_on_failure=True,
+                    folder_name=group or output_folder,
                 ):
                     raise RuntimeError("PDF export failed.")
                 if batch:
                     batch.successes.add(row_idx)
                 success += 1
+            except DriveDestinationError:
+                raise
             except Exception as error:
                 message = f"Row {row_idx + 1}: {error}"[:2000]
                 logging.error(message)
@@ -700,59 +849,93 @@ def generate_certificates_oauth2(
         return {
             'input_rows': input_rows, 'total': len(records), 'attempted_rows': len(records),
             'success': success, 'failed': len(errors), 'skipped': 0,
-            'created_pdfs': success, 'errors': errors,
+            'created_pdfs': success, 'errors': errors, 'output_folder_id': folder_id,
         }
+    except DriveDestinationError as error:
+        logging.warning('%s', error, exc_info=error.__cause__ is not None)
+        attempted = success + len(errors)
+        summary = _web_batch_result(batch, cleanup_pending=cleanup_pending) if batch else {
+            'input_rows': input_rows, 'total': len(records), 'attempted_rows': attempted,
+            'success': success, 'failed': len(errors), 'created_pdfs': success,
+            'pending_rows': len(records) - attempted, 'errors': errors, 'output_folder_id': folder_id,
+        }
+        if not summary['created_pdfs']:
+            guidance = 'Start a new batch with a writable output folder in My Drive.'
+        elif batch:
+            guidance = 'Restore write access and use Resume Batch to continue.'
+        else:
+            guidance = 'Restore write access before generating the remaining certificates.'
+        summary.update(interrupted=True, destination_error=f'{error} {guidance}')
+        return summary
+    except ValueError:
+        raise
     except Exception as error:
-        if batch is None:
+        if manifest is None:
             raise
         logging.exception("Generation was interrupted for batch %s", batch.batch_id)
         return _web_batch_result(
             batch, cleanup_pending=cleanup_pending,
             interruption=f"Generation paused after a Drive error. Check batch status or resume. {error}"[:2000],
         )
+    finally:
+        if imported_id:
+            # Keep the snapshot if Drive committed the manifest but its response was lost.
+            if manifest is None and publishing_manifest:
+                try:
+                    manifest = batch.load()
+                except Exception:
+                    logging.exception('Could not determine whether to keep the PowerPoint snapshot for batch %s', batch_id)
+                    manifest = {'snapshot_id': imported_id}
+            if manifest is None or manifest['snapshot_id'] != imported_id:
+                delete_temp_slide(files, imported_id)
 
 
 
-def _find_drive_folder(drive_service, folder_name, *, parent_id=None):
+def _find_drive_folder(files, folder_name):
     name = drive_query_value(folder_name)
-    query = f"name='{name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-    if parent_id:
-        query += f" and '{drive_query_value(parent_id)}' in parents"
-    result = drive_service.files().list(
-        q=query,
-        spaces='drive',
-        fields='files(id)',
-        pageSize=10,
-    ).execute()
-    folders = result.get('files', [])
-    return folders[0]['id'] if folders else None
+    query = f"name='{name}' and 'root' in parents and mimeType='{FOLDER_MIME_TYPE}' and trashed=false"
+    page_token = None
+    while True:
+        result = files.list(
+            q=query, spaces='drive', fields='nextPageToken,files(id,capabilities(canAddChildren))',
+            pageSize=100, pageToken=page_token, orderBy='createdTime',
+        ).execute()
+        for folder in result.get('files', []):
+            if can_add_drive_children(folder):
+                return folder['id']
+        page_token = result.get('nextPageToken')
+        if not page_token:
+            return None
 
 
 def _find_group_folders(files, parent_id, group_names):
     query = (
         f"'{drive_query_value(parent_id)}' in parents and "
-        "mimeType='application/vnd.google-apps.folder' and trashed=false"
+        f"mimeType='{FOLDER_MIME_TYPE}' and trashed=false"
     )
     folders = {}
     page_token = None
     while True:
         result = files.list(
-            q=query, spaces='drive', fields='nextPageToken,files(id,name)',
+            q=query, spaces='drive', fields='nextPageToken,files(id,name,capabilities(canAddChildren))',
             pageSize=1000, pageToken=page_token,
         ).execute()
         for folder in result.get('files', []):
-            if folder['name'] in group_names:
+            if folder['name'] in group_names and can_add_drive_children(folder):
                 folders.setdefault(folder['name'], folder['id'])
         page_token = result.get('nextPageToken')
         if not page_token or len(folders) == len(group_names):
             return folders
 
 
-def _create_drive_folder(files, folder_name, *, parent_id=None):
-    body = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
-    if parent_id:
-        body['parents'] = [parent_id]
-    return files.create(body=body, fields='id').execute()['id']
+def _create_drive_folder(files, folder_name, *, parent_id='root'):
+    body = {'name': folder_name, 'mimeType': FOLDER_MIME_TYPE, 'parents': [parent_id]}
+    try:
+        return files.create(body=body, fields='id', supportsAllDrives=True).execute()['id']
+    except HttpError as error:
+        if drive_parent_denied(error):
+            raise DriveDestinationError(folder_name) from error
+        raise
 
 
 def export_slide_to_pdf_drive(
@@ -764,6 +947,7 @@ def export_slide_to_pdf_drive(
     file_id=None,
     app_properties=None,
     raise_on_failure=False,
+    folder_name=None,
 ) -> bool:
     """Export Slides and upload a PDF using a fixed Drive ID when supplied."""
     files = drive_service.files()
@@ -796,6 +980,8 @@ def export_slide_to_pdf_drive(
         return True
     except Exception as error:
         if raise_on_failure:
+            if folder_name and drive_parent_denied(error):
+                raise DriveDestinationError(folder_name) from error
             raise RuntimeError(f"PDF upload failed: {error}") from error
         logging.error("PDF upload failed: %s", error)
         return False
@@ -917,7 +1103,8 @@ def _generate_local_certificates(
 
         temp_slide_id = None
         try:
-            filename = safe_filename(str(row.get('Name', f'certificate_{row_idx}')), max_bytes=200)
+            fields = _record_fields(row)
+            filename = safe_filename(fields.get(_source_field('name', fields), f'certificate_{row_idx}'), max_bytes=200)
             group_name = group_names.get(group_values[row_idx], '')
             destination = output_path / group_name
             destination.mkdir(exist_ok=True)
@@ -926,11 +1113,7 @@ def _generate_local_certificates(
                 drive_service, template_id, row_idx, template_metadata=template_metadata
             )
 
-            # Prepare replacements (convert all values to strings, case-insensitive matching)
-            replacements = {}
-            for k, v in row.items():
-                if k.lower() in detected_placeholders:
-                    replacements[k.lower()] = str(v)
+            replacements = _row_replacements(fields, detected_placeholders)
 
             # Replace text
             if not replace_text_in_slide(slides_service, temp_slide_id, replacements):

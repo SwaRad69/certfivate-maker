@@ -275,6 +275,37 @@ def test_browser_generate_and_first_n_each_post_once(dashboard):
     assert b'name="test_count"\r\n\r\n3\r\n' in dashboard.generation_payloads[1]
 
 
+def test_browser_can_upload_a_powerpoint_template_with_drive_recipients(dashboard):
+    from playwright.sync_api import expect
+
+    page = dashboard.page
+    dashboard.pick_csv()
+    expect(page.locator('#previewBody td')).to_have_count(4)
+    expect(page.locator('#slidesTemplateSource')).to_be_checked()
+    page.get_by_label('Upload from computer (.ppt or .pptx)', exact=True).check()
+    expect(page.locator('#templateId')).to_be_hidden()
+    page.locator('#templateFile').set_input_files({
+        'name': 'Awards.ppt', 'mimeType': 'application/vnd.ms-powerpoint', 'buffer': b'Mock PowerPoint content',
+    })
+    page.locator('#filenameField').select_option('Code')
+    page.locator('#generateBtn').click()
+    expect(page.locator('#successResult h3')).to_have_text('Generation complete')
+    payload, = dashboard.generation_payloads
+    assert b'name="template_file"; filename="Awards.ppt"' in payload
+    assert b'name="template_id"' not in payload
+    assert b'name="filename_field"\r\n\r\nCode\r\n' in payload
+
+    page.get_by_label('Google Slides', exact=True).check()
+    expect(page.locator('#templateFile')).to_be_hidden()
+    page.locator('#templateId').fill(TEMPLATE_A)
+    with page.expect_response('**/api/generate'):
+        page.locator('#generateBtn').click()
+    expect(page.locator('#successResult h3')).to_have_text('Generation complete')
+    assert len(dashboard.generation_payloads) == 2
+    assert b'name="template_id"' in dashboard.generation_payloads[1]
+    assert b'name="template_file"' not in dashboard.generation_payloads[1]
+
+
 @pytest.mark.parametrize(
     "key",
     [("names", SHEET_A), ("preview", "First Tab"), ("csv", DRIVE_CSV)],

@@ -17,8 +17,12 @@ PDF_BYTES = b'%PDF-1.4\nmock certificate\n'
 RECORDS = [{'Name': 'Ada'}, {'Name': 'Tariq'}]
 
 
-def http_error(status):
-    return HttpError(httplib2.Response({'status': str(status), 'reason': str(status)}), b'{}')
+def http_error(status, reason=None):
+    payload = {'error': {'message': reason, 'errors': [{'reason': reason}]}} if reason else {}
+    return HttpError(
+        httplib2.Response({'status': str(status), 'reason': str(status)}),
+        json.dumps(payload).encode(),
+    )
 
 
 class Drive:
@@ -34,6 +38,7 @@ class Drive:
         self.copies = []
         self.deleted = []
         self.pdf_creates = []
+        self.imported_templates = []
         self.bad_export = False
         self.fail_upload = False
         self.interrupt_upload = False
@@ -60,7 +65,9 @@ class Drive:
                 self.template_reads += 1
             if fileId not in self.entries:
                 raise http_error(404)
-            return dict(self.entries[fileId], id=fileId)
+            metadata = dict(self.entries[fileId], id=fileId)
+            metadata.pop('data', None)
+            return metadata
 
         return self.request(execute)
 
@@ -111,10 +118,15 @@ class Drive:
             if file_id in self.entries:
                 raise http_error(409)
             metadata = dict(body)
+            if metadata.get('mimeType') == FOLDER_MIME_TYPE:
+                metadata['capabilities'] = {'canAddChildren': True}
             if media_body is not None:
                 mime = media_body.mimetype()
-                metadata['mimeType'] = mime
+                metadata.setdefault('mimeType', mime)
                 metadata['data'] = media_body.getbytes(0, media_body.size())
+                if metadata['mimeType'] == SLIDES_MIME_TYPE:
+                    self.imported_templates.append((file_id, mime, metadata['data']))
+                    metadata['version'] = '1'
                 if mime == PDF_MIME_TYPE:
                     if self.fail_upload:
                         raise IOError("upload unavailable")
@@ -252,6 +264,220 @@ def test_grouped_drive_batch_reuses_subfolders_after_interruption_and_in_a_new_b
     for file_id in drive.pdf_creates:
         pdf = drive.entries[file_id]
         assert pdf['parents'] == [by_name[destinations[pdf['name']]]]
+
+
+@pytest.mark.parametrize('resumable', [False, True])
+def test_new_batches_skip_read_only_and_nested_folders_with_the_same_name(drive, resumable):
+    name = "Director's Certificates"
+    drive.entries['read-only'] = {
+        'name': name, 'mimeType': FOLDER_MIME_TYPE, 'parents': ['root'],
+        'capabilities': {'canAddChildren': False},
+    }
+    drive.entries['nested'] = {
+        'name': name, 'mimeType': FOLDER_MIME_TYPE, 'parents': ['another-folder'],
+        'capabilities': {'canAddChildren': True},
+    }
+    first = web_generate(generator.reserve_web_batch(object()) if resumable else None)
+    assert first['created_pdfs'] == 2
+    folder_id = first['output_folder_id']
+    assert folder_id not in ('read-only', 'nested')
+    assert drive.entries[folder_id]['parents'] == ['root']
+
+    second = web_generate(generator.reserve_web_batch(object()) if resumable else None)
+    assert second['created_pdfs'] == 2
+    assert second['output_folder_id'] == folder_id
+    assert all(drive.entries[pdf]['parents'] == [folder_id] for pdf in drive.pdf_creates)
+
+
+def test_grouped_batch_replaces_read_only_group_destination(drive):
+    initial = web_generate(generator.reserve_web_batch(object()))
+    folder_id = initial['output_folder_id']
+    drive.entries['read-only-group'] = {
+        'name': 'Orbit', 'mimeType': FOLDER_MIME_TYPE, 'parents': [folder_id],
+        'capabilities': {'canAddChildren': False},
+    }
+    result = web_generate(
+        generator.reserve_web_batch(object()), [{'Name': 'Grace', 'Team': 'Orbit'}],
+        group_by_column='Team',
+    )
+    assert result['created_pdfs'] == 1
+    group_id, = drive.entries[drive.pdf_creates[-1]]['parents']
+    assert group_id != 'read-only-group'
+    assert drive.entries[group_id]['name'] == 'Orbit'
+    assert drive.entries[group_id]['parents'] == [folder_id]
+
+
+def test_existing_batch_stops_on_unwritable_pinned_folder(drive):
+    folder_id = 'legacy-destination'
+    drive.entries[folder_id] = {
+        'name': "Director's Certificates", 'mimeType': FOLDER_MIME_TYPE, 'parents': ['root'],
+        'capabilities': {'canAddChildren': True},
+    }
+    batch_id = generator.reserve_web_batch(object())
+    web_generate(batch_id, work_seconds=0)
+    batch = generator.DriveBatch(drive, batch_id)
+    batch.load()
+    batch.record_failure(0, 'Row 1: old PDF upload error')
+    drive.entries[folder_id]['capabilities']['canAddChildren'] = False
+
+    result = web_generate(batch_id, retry_failed=True)
+    assert result['interrupted'] is True
+    assert 'Start a new batch' in result['destination_error']
+    assert (result['created_pdfs'], result['failed'], result['pending_rows']) == (0, 1, 1)
+    assert result['output_folder_id'] == folder_id
+    assert drive.copies == [batch.manifest['snapshot_id']]
+    assert not drive.pdf_creates
+
+
+def test_parent_permission_rejection_during_upload_pauses_and_resumes(drive, monkeypatch):
+    from io import BytesIO
+    from web import app as web
+
+    template_id = 'existing_template_for_fixtures'
+    drive.entries[template_id] = drive.entries['template']
+    monkeypatch.setattr(web.Credentials, 'from_authorized_user_info', lambda *a, **k: SimpleNamespace(expired=False))
+    client = web.app.test_client()
+    with client.session_transaction() as session:
+        session['credentials'] = {'mock': 'credentials'}
+        session['user_email'] = 'fixture@example.test'
+    token = client.get('/api/generation-batches/new').get_json()['batch_id']
+
+    def submit_batch(retry_failed='false'):
+        return client.post('/api/generate', data={
+            'csv_file': (BytesIO(b'Name\nAda\nTariq\nGrace\n'), 'input.csv'),
+            'template_id': template_id, 'batch_id': token, 'retry_failed': retry_failed,
+        })
+
+    original_create = drive.create
+    attempted_pdfs = []
+
+    def deny_second_upload(body, media_body=None, **kwargs):
+        if media_body and media_body.mimetype() == PDF_MIME_TYPE:
+            attempted_pdfs.append(body['id'])
+            if len(attempted_pdfs) == 2:
+                def forbidden():
+                    raise http_error(403, 'insufficientParentPermissions')
+                return drive.request(forbidden)
+        return original_create(body, media_body=media_body, **kwargs)
+
+    monkeypatch.setattr(drive, 'create', deny_second_upload)
+    response = submit_batch()
+    assert response.status_code == 202
+    body = response.get_json()
+    assert body['status'] == 'pending'
+    assert 'Restore write access and use Resume Batch' in body['message']
+    result = body['summary']
+    assert result['interrupted'] is True
+    assert (result['created_pdfs'], result['failed'], result['pending_rows']) == (1, 0, 2)
+    assert len(attempted_pdfs) == 2
+    assert set(drive.copies[1:]) == set(drive.deleted)
+
+    response = submit_batch(retry_failed='true')
+    assert response.status_code == 200
+    finished = response.get_json()['summary']
+    assert finished['created_pdfs'] == 3
+    assert finished['output_folder_id'] == result['output_folder_id']
+    assert attempted_pdfs[1] == attempted_pdfs[2]
+    assert len(drive.pdf_creates) == len(set(drive.pdf_creates)) == 3
+
+
+@pytest.mark.parametrize('extension, mime_type, filename_field, filenames', [
+    ('pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', '', ['Ada.pdf', 'Tariq.pdf']),
+    ('PPT', 'application/vnd.ms-powerpoint', 'Code', ['A1.pdf', 'T2.pdf']),
+])
+def test_powerpoint_batch_imports_once_and_resumes_without_the_upload(
+    drive, monkeypatch, extension, mime_type, filename_field, filenames,
+):
+    from io import BytesIO
+    from web import app as web
+
+    monkeypatch.setattr(web.Credentials, 'from_authorized_user_info', lambda *a, **k: SimpleNamespace(expired=False))
+    client = web.app.test_client()
+    with client.session_transaction() as session:
+        session['credentials'] = {'mock': 'credentials'}
+    token = client.get('/api/generation-batches/new').get_json()['batch_id']
+    original_generate = web.generate_certificates_oauth2
+    substitutions = []
+
+    def replace(_slides, _slide_id, replacements, **_kwargs):
+        substitutions.append(replacements)
+        return True
+
+    monkeypatch.setattr(generator, 'replace_text_in_slide', replace)
+
+    def submit(template_data=None):
+        data = {
+            'batch_id': token, 'template_source': 'powerpoint', 'filename_field': filename_field,
+            'csv_file': (BytesIO(b'Participant Name,Code\nAda,A1\nTariq,T2\n'), 'input.csv'),
+        }
+        if template_data is not None:
+            data['template_file'] = (BytesIO(template_data), f'Certificate.{extension}')
+        return client.post('/api/generate', data=data)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(web, 'generate_certificates_oauth2', lambda **kwargs: original_generate(work_seconds=0, **kwargs))
+        first = submit(b'PowerPoint content used by the Drive stub')
+    assert first.status_code == 202
+    assert first.get_json()['summary']['pending_rows'] == 2
+    (snapshot_id, source_mime, data), = drive.imported_templates
+    assert source_mime == mime_type
+    assert data == b'PowerPoint content used by the Drive stub'
+    assert drive.entries[snapshot_id]['mimeType'] == SLIDES_MIME_TYPE
+    assert not drive.copies
+
+    changed = submit(b'A different PowerPoint template')
+    assert changed.status_code == 400
+    assert 'differ from the original batch' in changed.get_json()['error']
+
+    finished = submit()
+    assert finished.status_code == 200
+    assert finished.get_json()['summary']['created_pdfs'] == 2
+    assert len(drive.imported_templates) == 1
+    assert snapshot_id in drive.deleted
+    assert [drive.entries[pdf]['name'] for pdf in drive.pdf_creates] == filenames
+    assert substitutions == [{'name': 'Ada'}, {'name': 'Tariq'}]
+
+
+def test_exact_name_column_takes_priority_over_participant_name(drive, monkeypatch):
+    substitutions = []
+
+    def replace(_slides, _slide_id, replacements, **_kwargs):
+        substitutions.append(replacements)
+        return True
+
+    monkeypatch.setattr(generator, 'replace_text_in_slide', replace)
+    result = web_generate(None, [{'Name': 'Ada', 'Participant Name': 'Different Name'}])
+    assert result['created_pdfs'] == 1
+    assert drive.entries[drive.pdf_creates[0]]['name'] == 'Ada.pdf'
+    assert substitutions == [{'name': 'Ada'}]
+
+
+@pytest.mark.parametrize('part, converted_fields, message', [
+    ('slides/slide1.xml', {'code'}, r'did not preserve \{\{name\}\}'),
+    ('slideMasters/slideMaster1.xml', set(), 'Slide Master or a layout'),
+])
+def test_powerpoint_reports_missing_placeholders_and_cleans_up(drive, monkeypatch, part, converted_fields, message):
+    from io import BytesIO
+    from zipfile import ZipFile
+
+    source = BytesIO()
+    with ZipFile(source, 'w') as archive:
+        archive.writestr(f'ppt/{part}', (
+            f'<a:p xmlns:a="{generator.DRAWINGML[1:-1]}">'
+            '<a:r><a:t>{{Na</a:t></a:r><a:r><a:t>me}}</a:t></a:r></a:p>'
+        ))
+    source.seek(0)
+    monkeypatch.setattr(generator, 'detect_placeholders_in_slide', lambda *args: converted_fields)
+    batch_id = generator.reserve_web_batch(object())
+    template = generator.PowerPointTemplate.from_upload('Certificate.pptx', source)
+    with pytest.raises(ValueError, match=message):
+        generator.generate_certificates_oauth2(
+            None, None, 'Certificates', object(), records=RECORDS, batch_id=batch_id, powerpoint_template=template,
+        )
+    (snapshot_id, _, _), = drive.imported_templates
+    assert snapshot_id in drive.deleted
+    assert batch_id not in drive.entries
+    assert not drive.pdf_creates
 
 
 def test_cli_grouped_pdfs_keep_separate_names_and_resume(drive, tmp_path):

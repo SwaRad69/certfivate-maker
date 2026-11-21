@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from generator import detect_placeholders_in_slide, replace_text_in_slide
+from generator import detect_placeholders_in_slide, replace_text_in_slide, validate_csv_placeholders
 
 
 class SlidesPresentation:
@@ -85,6 +85,19 @@ def test_mixed_native_fallback_preserves_repeats_case_and_utf16():
     assert ''.join(slides.containers[table]) == '0008 (0008)\n'
     assert any('replaceAllText' in request for request in slides.requests)
     assert any('deleteText' in request for request in slides.requests)
+
+
+def test_office_formatting_marks_and_wide_braces_do_not_hide_placeholders():
+    shape = ('office-shape', None)
+    slides = SlidesPresentation({
+        shape: ['🌟 {​{\u00a0Na', 'm\u200ee\u202f}\u2060} and \uff5b\uff5bParticipant\u00a0ID\uff5d\uff5d\n'],
+    }, native=False)
+    fields = detect_placeholders_in_slide(slides, 'converted')
+    assert fields == {'name', 'participant id'}
+    valid, issues = validate_csv_placeholders([{'Name': 'Ada', 'Participant ID': '0001'}], fields)
+    assert valid and not issues
+    assert replace_text_in_slide(slides, 'converted', {'Name': 'Ada', 'Participant ID': '0001'})
+    assert ''.join(slides.containers[shape]) == '🌟 Ada and 0001\n'
 
 
 def test_unresolved_occurrences_reject_the_row_even_if_native_reports_a_replacement():

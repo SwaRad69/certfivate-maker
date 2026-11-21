@@ -151,6 +151,26 @@ body {
     font-size: 14px;
 }
 
+.template-source {
+    border: 0;
+    min-inline-size: 0;
+}
+
+.template-source-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    margin-top: 8px;
+}
+
+.template-source-options label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
 .input {
     padding: 12px 15px;
     border: 1px solid #ddd;

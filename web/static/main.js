@@ -70,6 +70,10 @@ function setupEventListeners() {
     templateInput.addEventListener('input', function() {
         updateTemplateSelection(templateInput.value);
     });
+    const powerpointSource = document.getElementById('powerpointTemplateSource');
+    powerpointSource.addEventListener('change', switchTemplateSource);
+    document.getElementById('slidesTemplateSource').addEventListener('change', switchTemplateSource);
+    if (powerpointSource.checked) switchTemplateSource();
 
     setupGenerationSubmission();
 }
@@ -145,18 +149,45 @@ function extractTemplateId(input) {
     return /^[A-Za-z0-9_-]{20,}$/.test(id) ? id : '';
 }
 
+function switchTemplateSource() {
+    const usePowerPoint = document.getElementById('powerpointTemplateSource').checked;
+    document.getElementById('slidesTemplateFields').hidden = usePowerPoint;
+    document.getElementById('powerpointTemplateFields').hidden = !usePowerPoint;
+    setFilenameFields([]);
+    if (usePowerPoint) {
+        updateTemplateSelection('');
+        const useUpload = document.getElementById('csv-tab').classList.contains('active');
+        updatePowerPointFilenameColumns(useUpload ? uploadColumns : driveColumns);
+    } else {
+        updateTemplateSelection(document.getElementById('templateId').value);
+    }
+}
+
+function setFilenameFields(fields, selected = '') {
+    const select = document.getElementById('filenameField');
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = 'Default filename field';
+    select.replaceChildren(defaultOption);
+    for (const field of fields) {
+        const option = document.createElement('option');
+        option.value = field;
+        option.textContent = field;
+        select.appendChild(option);
+    }
+    select.value = fields.includes(selected) ? selected : '';
+    document.getElementById('filenamePlaceholderSelector').hidden = fields.length === 0;
+}
+
 function updateTemplateSelection(input, templateName = '') {
     const templateId = extractTemplateId(input);
     const version = ++templateSelectionVersion;
     const container = document.getElementById('filenamePlaceholderSelector');
-    const filenameField = document.getElementById('filenameField');
     const selectedTemplateName = document.getElementById('selectedTemplateName');
     const status = document.getElementById('templateStatus');
 
     if (container.dataset.templateId !== templateId) {
-        container.hidden = true;
-        filenameField.options.length = 1;
-        filenameField.value = '';
+        setFilenameFields([]);
         container.dataset.templateId = templateId;
     }
     selectedTemplateName.textContent = templateName;
@@ -182,27 +213,17 @@ async function detectTemplatePlaceholders(templateId, version) {
             extractTemplateId(document.getElementById('templateId').value) !== templateId) return;
 
         if (!response.ok) {
-            container.hidden = true;
-            select.options.length = 1;
+            setFilenameFields([]);
             status.textContent = data.error || 'Could not read the Google Slides template. Try again.';
             return;
         }
         const previousValue = container.hidden ? data.placeholders?.[0] : select.value;
-        select.options.length = 1;
-        for (const placeholder of data.placeholders || []) {
-            const option = document.createElement('option');
-            option.value = placeholder;
-            option.textContent = placeholder;
-            select.appendChild(option);
-        }
-        select.value = previousValue ?? '';
-        container.hidden = select.options.length === 1;
+        setFilenameFields(data.placeholders || [], previousValue);
         status.textContent = data.placeholders?.length ? '' : 'This presentation has no certificate placeholders.';
     } catch (error) {
         console.error('Error detecting placeholders:', error);
         if (version === templateSelectionVersion) {
-            container.hidden = true;
-            select.options.length = 1;
+            setFilenameFields([]);
             status.textContent = 'Could not read the Google Slides template. Try again.';
         }
     }
@@ -364,6 +385,12 @@ function updateGroupingColumns(headers) {
         select.appendChild(option);
     }
     select.disabled = headers.length === 0;
+    updatePowerPointFilenameColumns(headers);
+}
+
+function updatePowerPointFilenameColumns(headers) {
+    if (!document.getElementById('powerpointTemplateSource').checked) return;
+    setFilenameFields(headers, document.getElementById('filenameField').value);
 }
 
 async function loadUploadColumns(fileInput, file) {
@@ -427,11 +454,26 @@ function setupGenerationSubmission() {
     document.getElementById('checkBatchBtn').addEventListener('click', checkBatchStatus);
 }
 
-function buildGenerationPayload(testCount) {
-    const templateId = extractTemplateId(document.getElementById('templateId').value);
-    if (!templateId) throw new Error('Select a Google Slides template or paste its link or file ID.');
-
+function buildGenerationPayload(testCount, batch) {
     const data = new FormData();
+    const usePowerPoint = batch ? batch.templateSource === 'powerpoint'
+        : document.getElementById('powerpointTemplateSource').checked;
+    if (usePowerPoint) {
+        data.append('template_source', 'powerpoint');
+        const file = document.getElementById('templateFile').files[0];
+        if (file && !batch?.powerpointReady) {
+            if (!/\.pptx?$/i.test(file.name)) throw new Error('Choose a .pptx or .ppt template.');
+            if (!file.size) throw new Error('The selected PowerPoint template is empty.');
+            data.append('template_file', file);
+        } else if (!batch) {
+            throw new Error('Choose a .pptx or .ppt template to upload.');
+        }
+    } else {
+        const templateId = extractTemplateId(document.getElementById('templateId').value);
+        if (!templateId) throw new Error('Select a Google Slides template or paste its link or file ID.');
+        data.append('template_id', templateId);
+    }
+
     if (document.getElementById('csv-tab').classList.contains('active')) {
         const fileInput = document.getElementById('csvFile');
         const file = fileInput.files[0];
@@ -463,10 +505,9 @@ function buildGenerationPayload(testCount) {
         throw new Error('Select a data source.');
     }
 
-    data.append('template_id', templateId);
     const outputFolder = document.getElementById('outputFolder').value.trim() || 'Certificate Generator';
     data.append('output_folder', outputFolder);
-    const filenameField = document.getElementById('filenameField')?.value;
+    const filenameField = batch?.filenameField ?? document.getElementById('filenameField').value;
     if (filenameField) data.append('filename_field', filenameField);
     const groupByColumn = document.getElementById('groupByColumn').value;
     if (groupByColumn) data.append('group_by_column', groupByColumn);
@@ -500,8 +541,10 @@ function updateBatchRecovery(selectedId) {
 function rememberBatch(batch) {
     pendingBatches.set(batch.id, batch);
     try {
-        const { id, testCount, startedAt, groupByColumn } = batch;
-        localStorage.setItem(batchStoragePrefix + id, JSON.stringify({ id, testCount, startedAt, groupByColumn }));
+        const { id, testCount, startedAt, groupByColumn, templateSource, filenameField, powerpointReady } = batch;
+        localStorage.setItem(batchStoragePrefix + id, JSON.stringify({
+            id, testCount, startedAt, groupByColumn, templateSource, filenameField, powerpointReady,
+        }));
     } catch {
         // Keep the batch available for recovery on the current page.
     }
@@ -547,7 +590,9 @@ function submitGeneration({ testMode = false, resume = false } = {}) {
         const batch = resume ? selectedRecoveryBatch() : null;
         if (resume && !batch) return;
         const testCount = batch ? batch.testCount : testMode ? Number(document.getElementById('testCount').value) : null;
-        const data = batch?.data || buildGenerationPayload(testCount);
+        const needsPowerPoint = batch?.templateSource === 'powerpoint' && !batch.powerpointReady &&
+            !batch.data?.has('template_file');
+        const data = (needsPowerPoint ? null : batch?.data) || buildGenerationPayload(testCount, batch);
         if (batch?.groupByColumn !== undefined) {
             if (batch.groupByColumn) data.set('group_by_column', batch.groupByColumn);
             else data.delete('group_by_column');
@@ -567,6 +612,9 @@ function submitGeneration({ testMode = false, resume = false } = {}) {
             id: batchId, testCount, data,
             startedAt: batch?.startedAt ?? Date.now(),
             groupByColumn: data.get('group_by_column') || '',
+            templateSource: data.get('template_source') || 'slides',
+            filenameField: data.get('filename_field') || '',
+            powerpointReady: batch?.powerpointReady || false,
         };
         rememberBatch(savedBatch);
         let body = data;
@@ -589,6 +637,16 @@ function submitGeneration({ testMode = false, resume = false } = {}) {
             }
 
             const summary = result.summary;
+            if (savedBatch.templateSource === 'powerpoint' && !savedBatch.powerpointReady && summary &&
+                ['pending', 'partial', 'completed'].includes(result.status)) {
+                const continuation = new FormData();
+                data.forEach((value, key) => {
+                    if (key !== 'template_file') continuation.append(key, value);
+                });
+                savedBatch.data = continuation;
+                savedBatch.powerpointReady = true;
+                rememberBatch(savedBatch);
+            }
             const pending = summary?.pending_rows;
             if (response.status !== 202 || result.status !== 'pending' || !(pending > 0)) break;
             // Older running servers report a Drive interruption only in the error details.
@@ -602,7 +660,7 @@ function submitGeneration({ testMode = false, resume = false } = {}) {
 
             showLoading(`Generating certificates… ${summary.created_pdfs} saved, ${pending} remaining.`);
             previousPending = pending;
-            body = data;
+            body = savedBatch.data;
         }
 
         const outputFolder = data.get('output_folder') + (testCount === null ? '' : ' (TEST)');
@@ -689,11 +747,11 @@ function renderGenerationResult(result, outputFolder) {
     const errors = (summary.errors || []).filter(error => error !== message);
     renderResult(
         title, appearance, message, details, errors,
-        created > 0 && folder ? folder : ''
+        created > 0 && folder ? folder : '', summary.output_folder_id
     );
 }
 
-function renderResult(title, appearance, message, details, errors, folder) {
+function renderResult(title, appearance, message, details, errors, folder, folderId) {
     const container = document.getElementById('resultContainer');
     if (!container) return;
 
@@ -720,6 +778,15 @@ function renderResult(title, appearance, message, details, errors, folder) {
     if (folder) {
         const path = document.createElement('p');
         path.textContent = 'Certificates saved to your Google Drive in "' + folder + '".';
+        if (folderId) {
+            const link = document.createElement('a');
+            link.href = `https://drive.google.com/drive/folders/${encodeURIComponent(folderId)}`;
+            link.target = '_blank';
+            link.rel = 'noopener';
+            link.textContent = 'Open output folder';
+            path.textContent += ' ';
+            path.appendChild(link);
+        }
         detailElement.appendChild(path);
     }
 

@@ -6,7 +6,8 @@
 <div class="dashboard">
     <div class="dashboard-card">
         <h2>Generate Bulk Certificates</h2>
-        <p class="subtitle">Choose your recipient data and a Google Slides template to generate certificates in Drive.</p>
+        <p class="subtitle">Choose your recipient data and a template to generate certificates in Drive.
+        </p>
 
         <form id="generateForm" class="form" enctype="multipart/form-data" novalidate>
             <!-- Tab Navigation -->
@@ -20,7 +21,8 @@
                 <div class="form-group">
                     <label class="label">Recipient data</label>
                     <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                        <button type="button" id="recipientBrowse" class="btn btn-primary" aria-expanded="false" aria-controls="recipientList">
+                        <button type="button" id="recipientBrowse" class="btn btn-primary" aria-expanded="false"
+                            aria-controls="recipientList">
                             📁 Choose a Google Sheet or CSV
                         </button>
                         <span id="selectedSheetName" style="padding: 10px; color: #666;"></span>
@@ -30,7 +32,8 @@
                         <select id="recipientOptions" class="input">
                             <option value="">Choose a recipient file</option>
                         </select>
-                        <button type="button" id="recipientMore" class="btn btn-secondary" hidden>Load more files</button>
+                        <button type="button" id="recipientMore" class="btn btn-secondary" hidden>Load more
+                            files</button>
                         <small id="recipientBrowseStatus" role="status"></small>
                     </div>
                     <input type="hidden" id="selectedSheetId" name="sheets_id" value="">
@@ -64,23 +67,34 @@
                 <div class="form-group">
                     <label for="csvFile" class="label">📄 Data File</label>
                     <div class="file-input-wrapper">
-                        <input 
-                            type="file" 
-                            id="csvFile" 
-                            name="csv_file" 
-                            accept=".csv,.txt,.tsv,.xlsx,.xlsm,.xls,.ods,.json,.jsonl"
-                            class="file-input"
-                        >
+                        <input type="file" id="csvFile" name="csv_file"
+                            accept=".csv,.txt,.tsv,.xlsx,.xlsm,.xls,.ods,.json,.jsonl" class="file-input">
                         <span class="file-input-text">Choose data file</span>
                     </div>
-                    <small>Supports: CSV, TSV, Excel (.xlsx, .xlsm, .xls), ODS, JSON, JSON Lines, and plain text files. Files will be automatically converted to CSV format.</small>
+                    <small>Supports: CSV, TSV, Excel (.xlsx, .xlsm, .xls), ODS, JSON, JSON Lines, and plain text files.
+                        Files will be automatically converted to CSV format.</small>
                 </div>
             </div>
 
-            <div class="form-group">
+            <fieldset class="template-source">
+                <legend class="label">Certificate template</legend>
+                <div class="template-source-options">
+                    <label>
+                        <input type="radio" id="slidesTemplateSource" name="templateSource" value="slides" checked>
+                        Google Slides
+                    </label>
+                    <label>
+                        <input type="radio" id="powerpointTemplateSource" name="templateSource" value="powerpoint">
+                        Upload from computer (.ppt or .pptx)
+                    </label>
+                </div>
+            </fieldset>
+
+            <div class="form-group" id="slidesTemplateFields">
                 <label class="label" for="templateId">🎪 Template (Google Slides)</label>
                 <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                    <button type="button" id="templateBrowse" class="btn btn-primary" aria-expanded="false" aria-controls="templateList">
+                    <button type="button" id="templateBrowse" class="btn btn-primary" aria-expanded="false"
+                        aria-controls="templateList">
                         📽️ Select Template from Drive
                     </button>
                     <span id="selectedTemplateName" style="padding: 10px; color: #666;"></span>
@@ -90,19 +104,22 @@
                     <select id="templateOptions" class="input">
                         <option value="">Choose a presentation</option>
                     </select>
-                    <button type="button" id="templateMore" class="btn btn-secondary" hidden>Load more presentations</button>
+                    <button type="button" id="templateMore" class="btn btn-secondary" hidden>Load more
+                        presentations</button>
                     <small id="templateBrowseStatus" role="status"></small>
                 </div>
-                <input 
-                    type="text" 
-                    id="templateId" 
-                    name="template_id" 
-                    placeholder="Paste a Google Slides link or file ID"
-                    aria-describedby="templateStatus"
-                    required
-                    class="input"
-                >
+                <input type="text" id="templateId" name="template_id"
+                    placeholder="Paste a Google Slides link or file ID" aria-describedby="templateStatus"
+                    class="input">
                 <small id="templateStatus" role="status"></small>
+            </div>
+
+            <div class="form-group" id="powerpointTemplateFields" hidden>
+                <label for="templateFile" class="label">PowerPoint template file</label>
+                <input type="file" id="templateFile" name="template_file" accept=".pptx,.ppt"
+                    class="input" aria-describedby="powerpointTemplateHelp">
+                <small id="powerpointTemplateHelp">Type placeholders such as {% raw %}{{Name}}{% endraw %} in editable text boxes on the slide.
+                    The app converts your file using Google Drive when you generate certificates.</small>
             </div>
 
             <div class="form-group" id="filenamePlaceholderSelector" hidden>
@@ -115,23 +132,19 @@
 
             <div class="form-group">
                 <label for="outputFolder" class="label">📁 Output Folder (in Drive)</label>
-                <input 
-                    type="text" 
-                    id="outputFolder" 
-                    name="output_folder" 
-                    placeholder="Certificates" 
-                    value="Certificate Generator"
-                    class="input"
-                >
-                <small>Name of folder in your Drive where certificates will be saved</small>
+                <input type="text" id="outputFolder" name="output_folder" placeholder="Certificates"
+                    value="Certificate Generator" class="input">
+                <small>New batches use a writable folder at the top level of My Drive.</small>
             </div>
 
             <div class="form-group">
                 <label for="groupByColumn" class="label">Group certificates by column (optional)</label>
-                <select id="groupByColumn" name="group_by_column" class="input" aria-describedby="groupByColumnHelp" disabled>
+                <select id="groupByColumn" name="group_by_column" class="input" aria-describedby="groupByColumnHelp"
+                    disabled>
                     <option value="">Upload a file or select a sheet to see columns</option>
                 </select>
-                <small id="groupByColumnHelp">For example, choose Team to put everyone with the same team name in one subfolder. Rows with a blank value stay in the main output folder.</small>
+                <small id="groupByColumnHelp">For example, choose Team to put everyone with the same team name in one
+                    subfolder. Rows with a blank value stay in the main output folder.</small>
                 <small id="uploadColumnStatus" role="status" hidden></small>
             </div>
 
@@ -139,15 +152,18 @@
                 <button type="submit" id="generateBtn" class="btn btn-primary btn-large">
                     Generate Certificates
                 </button>
-                <button type="button" id="testBtn" class="btn btn-secondary btn-large" style="background-color: #ff9800;">
+                <button type="button" id="testBtn" class="btn btn-secondary btn-large"
+                    style="background-color: #ff9800;">
                     🧪 Test (First N)
                 </button>
             </div>
             <div id="testCountGroup" style="display: none; margin-bottom: 20px;">
                 <label for="testCount" class="label">How many certificates to test?</label>
                 <div style="display: flex; gap: 10px; align-items: center;">
-                    <input type="number" id="testCount" name="test_count" min="1" max="1000" value="10" class="input" style="max-width: 100px;">
-                    <button type="submit" id="startTestBtn" class="btn btn-secondary" style="background-color: #ff9800;">
+                    <input type="number" id="testCount" name="test_count" min="1" max="1000" value="10" class="input"
+                        style="max-width: 100px;">
+                    <button type="submit" id="startTestBtn" class="btn btn-secondary"
+                        style="background-color: #ff9800;">
                         ✅ Start Test
                     </button>
                     <button type="button" id="cancelTestBtn" class="btn btn-secondary" style="background-color: #999;">
@@ -228,7 +244,7 @@ Jane Smith,jane@example.com,April 13 2024,Conference</pre>
             <ol>
                 <li>Sign in with your Google account</li>
                 <li>Upload CSV with participant data</li>
-                <li>Paste your Google Slides template ID</li>
+                <li>Choose a Google Slides presentation or upload a PowerPoint template</li>
                 <li>Click Generate</li>
                 <li>Certificates appear in your Drive ✓</li>
             </ol>

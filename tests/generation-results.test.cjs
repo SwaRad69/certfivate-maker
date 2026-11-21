@@ -47,7 +47,7 @@ test('partial result renders accurate counts, actual folder and literal error de
         output_folder: '<partial folder>',
         summary: {
             input_rows: 10, attempted_rows: 3, successful_rows: 2, failed_rows: 1,
-            created_pdfs: 2, errors: [detail],
+            created_pdfs: 2, errors: [detail], output_folder_id: 'actual-folder-id',
         },
     });
     assert.equal(elements.successResult.heading.textContent, 'Generation partially complete');
@@ -57,7 +57,8 @@ test('partial result renders accurate counts, actual folder and literal error de
         'Input rows: 10', 'Attempted rows: 3', 'Successful rows: 2', 'Failed rows: 1',
         'Created PDFs: 2', detail,
     ]);
-    assert.equal(folder.textContent, 'Certificates saved to your Google Drive in "<partial folder>".');
+    assert.equal(folder.textContent.trim(), 'Certificates saved to your Google Drive in "<partial folder>".');
+    assert.equal(folder.children[0].href, 'https://drive.google.com/drive/folders/actual-folder-id');
 });
 
 test('zero PDFs display failure and no saved-folder message', () => {

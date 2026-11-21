@@ -11,8 +11,15 @@ SCOPES = [
     'https://www.googleapis.com/auth/presentations',
 ]
 
-# Placeholder pattern: {{FieldName}}
-PLACEHOLDER_PATTERN = re.compile(r'\{\{([^}]+)\}\}')
+# Office documents can insert invisible formatting marks into otherwise identical text.
+PLACEHOLDER_FORMAT_MARKS = r'\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff'
+PLACEHOLDER_FORMATTING = re.compile(f'[{PLACEHOLDER_FORMAT_MARKS}]')
+_OPEN_BRACE = r'[{\uff5b]'
+_CLOSE_BRACE = r'[}\uff5d]'
+_OPTIONAL_MARKS = rf'[{PLACEHOLDER_FORMAT_MARKS}]*'
+PLACEHOLDER_PATTERN = re.compile(
+    _OPEN_BRACE + _OPTIONAL_MARKS + _OPEN_BRACE + r'([^}\uff5d]+)' + _CLOSE_BRACE + _OPTIONAL_MARKS + _CLOSE_BRACE
+)
 
 # Default paths
 DEFAULT_OUTPUT_FOLDER = './certificates'
